@@ -1,83 +1,474 @@
-"""This contains all of the views for the Shepherd application's various
-webpages.
-"""
+"""This contains all of the views used by the Shepherd application."""
 
-# Django imports for generic views and template rendering
-from django.views import generic
-from django.shortcuts import render
-from django.contrib import messages
-from django.urls import reverse_lazy
-from django.views.generic.edit import CreateView, UpdateView, DeleteView
-from django.core import serializers
-
-# Django imports for verifying a user is logged-in to access a view
-from django.contrib.auth.decorators import login_required
-from django.contrib.auth.mixins import LoginRequiredMixin
-
-# Django imports for forms
-from django.http import HttpResponseRedirect, HttpResponse
-from django.shortcuts import get_object_or_404
-
-# Django Q imports for task management
-from django_q.tasks import async_task
-
-# Import for references to Django's settings.py
-from django.conf import settings
-
-# Import the Shepherd application's models
-from django.db.models import Q
-from django.urls import reverse
-# from rolodex.models import Project
-from django_q.models import Task
-from .forms import (CheckoutForm, DomainCreateForm,
-                            DomainNoteCreateForm, BurnForm,
-                            ServerNoteCreateForm, ServerCreateForm,
-                            ServerCheckoutForm, TransientServerCreateForm,
-                            DomainLinkForm, AuxServerAddressCreateForm)
-from .models import (Domain, HealthStatus, DomainStatus, WhoisStatus,
-                             History, DomainServerConnection, DomainNote)
-from .models import (ServerNote, ServerHistory, ServerProvider,
-                             ServerStatus, StaticServer, TransientServer,
-                             AuxServerAddress)
-from ghostwriter.rolodex.models import Project
-
-# Import model filters for views
-from .filters import DomainFilter, ServerFilter
-
-# Import Python libraries for various things
-import csv
-import datetime
-from io import StringIO
-
-# Setup logger
+# Standard Libraries
 import logging
 import logging.config
+from datetime import datetime
 
-# Using __name__ resolves to ghostwriter.shepherd.tasks
+# Django & Other 3rd Party Libraries
+from django import forms
+from django.contrib import messages
+from django.contrib.auth.decorators import login_required
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.core import serializers
+from django.db import transaction
+from django.db.models import Q
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
+from django.shortcuts import get_object_or_404, render
+from django.template.loader import render_to_string
+from django.urls import reverse, reverse_lazy
+from django.utils.translation import gettext_lazy as _
+from django.views.generic.detail import DetailView, SingleObjectMixin
+from django.views.generic.edit import CreateView, DeleteView, UpdateView, View
+from django_q.models import Task
+from django_q.tasks import async_task
+
+# Ghostwriter Libraries
+from ghostwriter.commandcenter.models import (
+    CloudServicesConfiguration,
+    NamecheapConfiguration,
+    VirusTotalConfiguration,
+)
+from ghostwriter.rolodex.models import Project
+
+from .filters import DomainFilter, ServerFilter
+from .forms import BurnForm, CheckoutForm, DomainForm, DomainLinkForm, DomainNoteForm
+from .forms_server import (
+    ServerAddressFormSet,
+    ServerCheckoutForm,
+    ServerForm,
+    ServerNoteForm,
+    TransientServerForm,
+)
+from .models import (
+    AuxServerAddress,
+    Domain,
+    DomainNote,
+    DomainServerConnection,
+    DomainStatus,
+    HealthStatus,
+    History,
+    ServerHistory,
+    ServerNote,
+    ServerStatus,
+    StaticServer,
+    TransientServer,
+)
+from .resources import DomainResource, StaticServerResource
+
+# Using __name__ resolves to ghostwriter.shepherd.views
 logger = logging.getLogger(__name__)
-LOGGING_CONFIG = None
-logging.config.dictConfig({
-    'version': 1,
-    'disable_existing_loggers': False,
-    'formatters': {
-        'console': {
-            # Format: timestamp + name + 12 spaces + info level + 8 spaces + message
-            'format': '%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
-        },
-    },
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-            'formatter': 'console',
-        },
-    },
-    'loggers': {
-        '': {
-            'level': 'INFO',
-            'handlers': ['console'],
-        },
-    },
-})
+
+
+##################
+# AJAX Functions #
+##################
+
+
+@login_required
+def update_domain_badges(request, pk):
+    """
+    Return an updated version of the template following a delete action related to
+    an individual :model:`rolodex.Domain`.
+
+    **Template**
+
+    :template:`snippets/domain_nav_tabs.html`
+    """
+    domain_instance = get_object_or_404(Domain, pk=pk)
+    html = render_to_string(
+        "snippets/domain_nav_tabs.html",
+        {"domain": domain_instance},
+    )
+    return HttpResponse(html)
+
+
+@login_required
+def ajax_load_projects(request):
+    """
+    Filter :model:`rolodex.Project` when user changes :model:`rolodex.Client` selection.
+
+    **Context**
+
+    ``projects``
+        Filtered queryset for :model:`rolodex.Project`
+
+    **Template**
+
+    :template:`shepherd/project_dropdown_list.html`
+    """
+    client_id = request.GET.get("client")
+    projects = Project.objects.filter(client_id=client_id).order_by("codename")
+
+    return render(
+        request, "shepherd/project_dropdown_list.html", {"projects": projects}
+    )
+
+
+@login_required
+def ajax_load_project(request):
+    """
+    Retrieve individual :model:`rolodex.Project`.
+
+    **Context**
+
+    ``project``
+        Individual :model:`rolodex.Project`
+    """
+    project_id = request.GET.get("project")
+    project = Project.objects.filter(id=project_id)
+    data = serializers.serialize("json", project)
+    return HttpResponse(data, content_type="application/json")
+
+
+@login_required
+def ajax_domain_overwatch(request):
+    """
+    Retrieve an individual :model:`shepherd.History` to check domain's past history
+    prior to checkout.
+    """
+    client_id = None
+    domain_id = None
+    try:
+        client_id = int(request.GET.get("client"))
+        domain_id = int(request.GET.get("domain"))
+    except Exception:
+        logger.exception("Received bad primary key values")
+
+    if client_id and domain_id:
+        domain_history = History.objects.filter(
+            Q(domain=domain_id) & Q(client=client_id)
+        )
+        if domain_history:
+            data = {
+                "result": "warning",
+                "message": "Domain has been used with this client in the past",
+            }
+        else:
+            data = {"result": "success", "message": ""}
+    else:
+        data = {"result": "error"}
+
+    return JsonResponse(data)
+
+
+@login_required
+def ajax_project_domains(request, pk):
+    """
+    Retrieve all :model:`shepherd.History` related to an individual
+    :model:`rolodex.Project`.
+    """
+    domain_history = History.objects.filter(project=pk)
+    data = serializers.serialize("json", domain_history, use_natural_foreign_keys=True)
+
+    return HttpResponse(data, content_type="application/json")
+
+
+class DomainRelease(LoginRequiredMixin, SingleObjectMixin, View):
+    """
+    Set the ``domain_status`` field of an individual :model:`shepherd.Domain` to
+    the ``Available`` entry in :model:`shepherd.DomainStatus` and update the
+    associated :model:`shepherd.History` entry.
+    """
+
+    model = History
+
+    def post(self, *args, **kwargs):
+        self.object = self.get_object()
+        if self.request.user == self.object.operator:
+            # Reset domain status to ``Available`` and commit the change
+            domain_instance = Domain.objects.get(pk=self.object.domain.id)
+            domain_instance.domain_status = DomainStatus.objects.get(
+                domain_status="Available"
+            )
+            domain_instance.save()
+            # Set the release date to now so historical record is accurate
+            self.object.end_date = datetime.now()
+            self.object.save()
+            data = {"result": "success", "message": "Domain successfully released"}
+            logger.info(
+                "Released %s %s by request of %s",
+                self.object.__class__.__name__,
+                self.object.id,
+                self.request.user,
+            )
+        else:
+            data = {
+                "result": "error",
+                "message": "You are not authorized to release this domain",
+            }
+        return JsonResponse(data)
+
+
+class ServerRelease(LoginRequiredMixin, SingleObjectMixin, View):
+    """
+    Set the ``server_status`` field of an individual :model:`shepherd.StaticServer` to
+    the ``Available`` entry in :model:`shepherd.DomainStatus` and update the
+    associated :model:`shepherd.ServerHistory` entry.
+    """
+
+    model = ServerHistory
+
+    def post(self, *args, **kwargs):
+        self.object = self.get_object()
+        if self.request.user == self.object.operator:
+            # Reset server status to ``Available`` and commit the change
+            server_instance = StaticServer.objects.get(pk=self.object.server.id)
+            server_instance.server_status = ServerStatus.objects.get(
+                server_status="Available"
+            )
+            server_instance.save()
+            # Set the release date to now so historical record is accurate
+            self.object.end_date = datetime.now()
+            self.object.save()
+            data = {"result": "success", "message": "Server successfully released"}
+            logger.info(
+                "Released %s %s by request of %s",
+                self.object.__class__.__name__,
+                self.object.id,
+                self.request.user,
+            )
+        else:
+            data = {
+                "result": "error",
+                "message": "You are not authorized to release this server",
+            }
+        return JsonResponse(data)
+
+
+class DomainUpdateHealth(LoginRequiredMixin, View):
+    """
+    Create an individual :model:`django_q.Task` under group ``Domain Updates`` with
+    :task:`shepherd.tasks.check_domains` for one or more :model:`shepherd.Domain`.
+    """
+
+    def setup(self, request, *args, **kwargs):
+        super().setup(request, *args, **kwargs)
+        # Determine if ``pk`` is in the kwargs to update just one domain
+        self.domain = None
+        if "pk" in self.kwargs:
+            pk = self.kwargs.get("pk", None)
+            # Try to get the domain from :model:`shepherd.Domain`
+            if pk:
+                self.domain = get_object_or_404(Domain, pk=pk)
+
+    def post(self, request, *args, **kwargs):
+        # Add an async task grouped as ``Domain Updates`` or ``Individual Domain Update``
+        result = "success"
+        try:
+            if self.domain:
+                task_id = async_task(
+                    "ghostwriter.shepherd.tasks.check_domains",
+                    domain=self.domain.id,
+                    group="Individual Domain Update",
+                    hook="ghostwriter.shepherd.tasks.send_slack_complete_msg",
+                )
+            else:
+                task_id = async_task(
+                    "ghostwriter.shepherd.tasks.check_domains",
+                    group="Domain Updates",
+                    hook="ghostwriter.shepherd.tasks.send_slack_complete_msg",
+                )
+            message = "Successfully queued domain category update task (Task ID {task}) ".format(
+                task=task_id
+            )
+        except Exception:
+            result = "error"
+            message = "Domain category update task could not be queued"
+
+        data = {
+            "result": result,
+            "message": message,
+        }
+        return JsonResponse(data)
+
+
+class DomainUpdateDNS(LoginRequiredMixin, View):
+    """
+    Create an individual :model:`django_q.Task` under group ``DNS Updates`` with
+    :task:`shepherd.tasks.update_dns` for one or more :model:`shepherd.Domain`.
+    """
+
+    def setup(self, request, *args, **kwargs):
+        super().setup(request, *args, **kwargs)
+        # Determine if ``pk`` is in the kwargs to update just one domain
+        self.domain = None
+        if "pk" in self.kwargs:
+            pk = self.kwargs.get("pk", None)
+            # Try to get the domain from :model:`shepherd.Domain`
+            if pk:
+                self.domain = get_object_or_404(Domain, pk=pk)
+
+    def post(self, request, *args, **kwargs):
+        # Add an async task grouped as ``DNS Updates`` or ``Individual DNS Update``
+        result = "success"
+        try:
+            if self.domain:
+                task_id = async_task(
+                    "ghostwriter.shepherd.tasks.update_dns",
+                    domain=self.domain.id,
+                    group="Individual DNS Update",
+                    hook="ghostwriter.shepherd.tasks.send_slack_complete_msg",
+                )
+            else:
+                task_id = async_task(
+                    "ghostwriter.shepherd.tasks.update_dns",
+                    group="DNS Updates",
+                    hook="ghostwriter.shepherd.tasks.send_slack_complete_msg",
+                )
+            message = "Successfully queued DNS update task (Task ID {task})".format(
+                task=task_id
+            )
+        except Exception:
+            result = "error"
+            message = "DNS update task could not be queued"
+
+        data = {
+            "result": result,
+            "message": message,
+        }
+        return JsonResponse(data)
+
+
+class RegistrarSyncNamecheap(LoginRequiredMixin, View):
+    """
+    Create an individual :model:`django_q.Task` under group ``Namecheap Update`` with
+    :task:`shepherd.tasks.fetch_namecheap_domains` to create or update one or more
+    :model:`shepherd.Domain`.
+    """
+
+    def post(self, request, *args, **kwargs):
+        # Add an async task grouped as ``Namecheap Update``
+        result = "success"
+        try:
+            task_id = async_task(
+                "ghostwriter.shepherd.tasks.fetch_namecheap_domains",
+                group="Namecheap Update",
+            )
+            message = (
+                "Successfully queued Namecheap update task (Task ID {task})".format(
+                    task=task_id
+                )
+            )
+        except Exception:
+            result = "error"
+            message = "Namecheap update task could not be queued"
+
+        data = {
+            "result": result,
+            "message": message,
+        }
+        return JsonResponse(data)
+
+
+class MonitorCloudInfrastructure(LoginRequiredMixin, View):
+    """
+    Create an individual :model:`django_q.Task` under group ``Cloud Infrastructure Review``
+    with :task:`shepherd.tasks.review_cloud_infrastructure`.
+    """
+
+    def post(self, request, *args, **kwargs):
+        # Add an async task grouped as ``Cloud Infrastructure Review``
+        result = "success"
+        try:
+            task_id = async_task(
+                "ghostwriter.shepherd.tasks.review_cloud_infrastructure",
+                group="Cloud Infrastructure Review",
+            )
+            message = (
+                "Successfully queued the cloud monitor task (Task ID {task})".format(
+                    task=task_id
+                )
+            )
+        except Exception:
+            result = "error"
+            message = "Cloud monitor task could not be queued"
+
+        data = {
+            "result": result,
+            "message": message,
+        }
+        return JsonResponse(data)
+
+
+class ServerNoteDelete(LoginRequiredMixin, SingleObjectMixin, View):
+    """
+    Delete an individual :model:`shepherd.ServerNote`.
+    """
+
+    model = ServerNote
+
+    def post(self, *args, **kwargs):
+        self.object = self.get_object()
+        self.object.delete()
+        data = {"result": "success", "message": "Note successfully deleted!"}
+        logger.info(
+            "Deleted %s %s by request of %s",
+            self.object.__class__.__name__,
+            self.object.id,
+            self.request.user,
+        )
+        return JsonResponse(data)
+
+
+class DomainNoteDelete(LoginRequiredMixin, SingleObjectMixin, View):
+    """
+    Delete an individual :model:`shepherd.DomainNote`.
+    """
+
+    model = DomainNote
+
+    def post(self, *args, **kwargs):
+        self.object = self.get_object()
+        self.object.delete()
+        data = {"result": "success", "message": "Note successfully deleted!"}
+        logger.info(
+            "Deleted %s %s by request of %s",
+            self.object.__class__.__name__,
+            self.object.id,
+            self.request.user,
+        )
+        return JsonResponse(data)
+
+
+class TransientServerDelete(LoginRequiredMixin, SingleObjectMixin, View):
+    """
+    Delete an individual :model:`shepherd.TransientServer`.
+    """
+
+    model = TransientServer
+
+    def post(self, *args, **kwargs):
+        self.object = self.get_object()
+        # self.object.delete()
+        data = {"result": "success", "message": "VPS successfully deleted!"}
+        logger.info(
+            "Deleted %s %s by request of %s",
+            self.object.__class__.__name__,
+            self.object.id,
+            self.request.user,
+        )
+        return JsonResponse(data)
+
+
+class DomainServerConnectionDelete(LoginRequiredMixin, SingleObjectMixin, View):
+    """
+    Delete an individual :model:`shepherd.DomainServerConnection`.
+    """
+
+    model = DomainServerConnection
+
+    def post(self, *args, **kwargs):
+        self.object = self.get_object()
+        self.object.delete()
+        data = {"result": "success", "message": "Link successfully deleted!"}
+        logger.info(
+            "Deleted %s %s by request of %s",
+            self.object.__class__.__name__,
+            self.object.id,
+            self.request.user,
+        )
+        return JsonResponse(data)
 
 
 ##################
@@ -87,643 +478,372 @@ logging.config.dictConfig({
 
 @login_required
 def index(request):
-    """View function to redirect empty requests to the dashboard."""
-    return HttpResponseRedirect(reverse('home:dashboard'))
+    """
+    Redirect empty requests to the user dashboard.
+    """
+    return HttpResponseRedirect(reverse("home:dashboard"))
 
 
 @login_required
 def domain_list(request):
-    """View showing all domain names. This view defaults to the
-    domain_list.html template and allows for filtering.
+    """
+    Display a list of all :model:`shepherd.Domain`.
+
+    **Context**
+
+    ``filter``
+        Instance of :filter:`shepherd.DomainFilter`
+
+    **Template**
+
+    :template:`shepherd/domain_list.html`
     """
     # Check if a search parameter is in the request
-    try:
-        search_term = request.GET.get('domain_search')
-    except Exception:
-        search_term = ''
+    search_term = ""
+    if "domain_search" in request.GET:
+        search_term = request.GET.get("domain_search").strip()
+        if search_term is None or search_term == "":
+            search_term = ""
     # If there is a search term, filter the query by domain name or category
     if search_term:
         messages.success(
             request,
-            'Showing search results for: %s' %
-            search_term, extra_tags='alert-success')
-        domains_list = Domain.objects.select_related(
-                            'domain_status', 'whois_status', 'health_status'
-                        ).filter(
-                            Q(name__icontains=search_term) |
-                            Q(all_cat__icontains=search_term)
-                        ).order_by('name')
+            "Showing search results for: {}".format(search_term),
+            extra_tags="alert-success",
+        )
+        domains_list = (
+            Domain.objects.select_related(
+                "domain_status", "whois_status", "health_status"
+            )
+            .filter(Q(name__icontains=search_term) | Q(all_cat__icontains=search_term))
+            .order_by("name")
+        )
     else:
         domains_list = Domain.objects.select_related(
-                            'domain_status', 'whois_status', 'health_status'
-                        ).all()
-    domains_filter = DomainFilter(request.GET, queryset=domains_list)
-    return render(
-        request,
-        'shepherd/domain_list.html',
-        {'filter': domains_filter})
+            "domain_status", "whois_status", "health_status"
+        ).all()
+    # Copy the GET request data
+    data = request.GET.copy()
+    # If user has not submitted their own filter, default to showing only Available domains
+    if len(data) == 0:
+        data["domain_status"] = 1
+    domains_filter = DomainFilter(data, queryset=domains_list)
+    return render(request, "shepherd/domain_list.html", {"filter": domains_filter})
 
 
 @login_required
 def server_list(request):
-    """View showing all servers. This view defaults to the server_list.html
-    template and allows for filtering.
     """
-    servers_list = StaticServer.objects.select_related('server_status').\
-        all().order_by('ip_address')
+    Display a list of all :model:`shepherd.StaticServer`.
+
+    **Context**
+
+    ``filter``
+        Instance of :filter:`shepherd.ServerFilter.
+
+    **Template**
+
+    :template:`shepherd/server_list.html`
+    """
+    servers_list = (
+        StaticServer.objects.select_related("server_status")
+        .all()
+        .order_by("ip_address")
+    )
     servers_filter = ServerFilter(request.GET, queryset=servers_list)
-    return render(
-        request,
-        'shepherd/server_list.html',
-        {'filter': servers_filter})
+    return render(request, "shepherd/server_list.html", {"filter": servers_filter})
 
 
 @login_required
 def server_search(request):
-    """View that takes POST data for a server IP address and a project ID
-    to redirect to the server checkout page.
     """
-    if request.method == 'POST':
-        ip_address = request.POST.get('server_search').strip()
-        project_id = request.POST.get('project_id')
+    Search :model:`shepherd.StaticServer` and :model:`shepherd.AuxServerAddress` for
+    an instance of :model:`rolodex.Project` to return a matching :model:`shepherd.StaticServer`.
+    """
+    if request.method == "POST":
+        ip_address = request.POST.get("server_search").strip()
+        project_id = request.POST.get("project_id")
         try:
             server_instance = StaticServer.objects.get(ip_address=ip_address)
             if server_instance:
-                unavailable = ServerStatus.objects.get(server_status='Unavailable')
+                unavailable = ServerStatus.objects.get(server_status="Unavailable")
                 if server_instance.server_status == unavailable:
                     messages.warning(
                         request,
-                        'The server matching "%s" is currently marked as unavailable' %
-                        ip_address, extra_tags='alert-warning')
+                        "The server matching {server} is currently marked as unavailable".format(
+                            server=ip_address
+                        ),
+                        extra_tags="alert-warning",
+                    )
                     return HttpResponseRedirect(
-                        '{}#collapseInfra'.format(
-                            reverse(
-                                'rolodex:project_detail',
-                                kwargs={'pk': project_id}
-                            )
+                        "{}#infrastructure".format(
+                            reverse("rolodex:project_detail", kwargs={"pk": project_id})
                         )
                     )
                 else:
-                    return HttpResponseRedirect(reverse(
-                            'shepherd:server_checkout',
-                            kwargs={'pk': server_instance.id}))
+                    return HttpResponseRedirect(
+                        reverse(
+                            "shepherd:server_checkout",
+                            kwargs={"pk": server_instance.id},
+                        )
+                    )
             else:
                 messages.success(
                     request,
-                    'No server was found matching %s' %
-                    ip_address, extra_tags='alert-success')
+                    "No server was found matching {server}".format(server=ip_address),
+                    extra_tags="alert-success",
+                )
                 return HttpResponseRedirect(
-                    '{}#collapseInfra'.format(
-                        reverse(
-                            'rolodex:project_detail',
-                            kwargs={'pk': project_id}
-                        )
+                    "{}#infrastructure".format(
+                        reverse("rolodex:project_detail", kwargs={"pk": project_id})
                     )
                 )
         except Exception:
             # Pass here to move on to try auxiliary address search
             pass
         try:
-            server_instance = AuxServerAddress.objects.select_related('static_server').get(ip_address=ip_address)
+            server_instance = AuxServerAddress.objects.select_related(
+                "static_server"
+            ).get(ip_address=ip_address)
             if server_instance:
-                unavailable = ServerStatus.objects.get(server_status='Unavailable')
+                unavailable = ServerStatus.objects.get(server_status="Unavailable")
                 if server_instance.static_server.server_status == unavailable:
                     messages.warning(
                         request,
-                        'The server matching "%s" is currently marked as unavailable' %
-                        ip_address, extra_tags='alert-warning')
+                        "The server matching {server} is currently marked as unavailable".format(
+                            server=ip_address
+                        ),
+                        extra_tags="alert-warning",
+                    )
                     return HttpResponseRedirect(
-                        '{}#collapseInfra'.format(
-                            reverse(
-                                'rolodex:project_detail',
-                                kwargs={'pk': project_id}
-                            )
+                        "{}#infrastructure".format(
+                            reverse("rolodex:project_detail", kwargs={"pk": project_id})
                         )
                     )
                 else:
-                    return HttpResponseRedirect(reverse(
-                            'shepherd:server_checkout',
-                            kwargs={'pk': server_instance.static_server.id}))
+                    return HttpResponseRedirect(
+                        reverse(
+                            "shepherd:server_checkout",
+                            kwargs={"pk": server_instance.static_server.id},
+                        )
+                    )
             else:
                 messages.success(
                     request,
-                    'No server was found matching %s' %
-                    ip_address, extra_tags='alert-success')
+                    "No server was found matching {server}".format(server=ip_address),
+                    extra_tags="alert-success",
+                )
                 return HttpResponseRedirect(
-                    '{}#collapseInfra'.format(
-                        reverse(
-                            'rolodex:project_detail',
-                            kwargs={'pk': project_id}
-                        )
+                    "{}#infrastructure".format(
+                        reverse("rolodex:project_detail", kwargs={"pk": project_id})
                     )
                 )
         except Exception:
             messages.warning(
                 request,
-                'No server was found matching %s' %
-                ip_address, extra_tags='alert-warning')
+                "No server was found matching {server}".format(server=ip_address),
+                extra_tags="alert-warning",
+            )
             return HttpResponseRedirect(
-                '{}#collapseInfra'.format(
-                    reverse(
-                        'rolodex:project_detail',
-                        kwargs={'pk': project_id}
-                    )
+                "{}#infrastructure".format(
+                    reverse("rolodex:project_detail", kwargs={"pk": project_id})
                 )
             )
     else:
-        return HttpResponseRedirect(reverse('rolodex:index'))
-
-
-@login_required
-def ajax_load_projects(request):
-    """View function used with AJAX for filtering project dropdown lists based
-    on changes to a client dropdown list.
-    """
-    client_id = request.GET.get('client')
-    projects = Project.objects.filter(client_id=client_id).order_by('codename')
-    return render(
-        request,
-        'shepherd/project_dropdown_list.html',
-        {'projects': projects})
-
-
-@login_required
-def ajax_load_project(request):
-    """View function used with AJAX for retrieving project details.
-    Used in checkout forms to set the default checkout date.
-    """
-    project_id = request.GET.get('project')
-    project = Project.objects.filter(id=project_id)
-    data = serializers.serialize('json', project)
-    return HttpResponse(data, content_type='application/json')
-
-
-@login_required
-def domain_release(request, pk):
-    """View function for releasing a domain back to the pool. The Primary Key
-    passed to this view is used to look-up the requested domain.
-    """
-    # Fetch the checkout for the provided primary key
-    checkout_instance = get_object_or_404(History, pk=pk)
-    # If this is a GET request then check if domain can be released
-    if request.method == 'GET':
-        # Allow the action if the current user is the one who checked out
-        # the domain
-        if request.user == checkout_instance.operator:
-            # Reset domain status to `Available` and commit the change
-            domain_instance = Domain.objects.\
-                get(pk=checkout_instance.domain.id)
-            domain_instance.domain_status = DomainStatus.objects.\
-                get(domain_status='Available')
-            domain_instance.save()
-            # Get the most recent project for this domain and update the
-            # release date
-            checkout_instance.end_date = datetime.datetime.now()
-            checkout_instance.save()
-            # Redirect to the user's checked-out domains
-            messages.success(
-                request,
-                'Domain successfully released back into the pool.',
-                extra_tags='alert-success')
-            return HttpResponseRedirect(reverse('shepherd:user_assets'))
-        # Otherwise return an error message
-        else:
-            messages.error(
-                request,
-                'Your user account does match the user that has checked out '
-                'this domain, so you are not authorized to release it.',
-                extra_tags='alert-danger')
-            return HttpResponseRedirect(reverse('shepherd:user_assets'))
-    # If this is a POST (or any other method) redirect
-    else:
-        return HttpResponseRedirect(reverse('shepherd:user_assets'))
-
-
-@login_required
-def server_release(request, pk):
-    """View function for releasing a server back to the pool. The Primary Key
-    passed to this view is used to look-up the requested server.
-    """
-    # Fetch the checkout for the provided primary key
-    checkout_instance = get_object_or_404(ServerHistory, pk=pk)
-    # If this is a GET request then check if server can be released
-    if request.method == 'GET':
-        # Allow the action if the current user is the one who checked out
-        # the server
-        if request.user == checkout_instance.operator:
-            # Reset domain status to `Available` and commit the change
-            server_instance = get_object_or_404(
-                StaticServer,
-                pk=checkout_instance.server.id)
-            server_instance.server_status = ServerStatus.objects.get(
-                server_status='Available')
-            server_instance.save()
-            # Get the most recent project for this domain and update
-            # the release date
-            checkout_instance.end_date = datetime.datetime.now()
-            checkout_instance.save()
-            # Redirect to the user's checked-out domains
-            messages.success(
-                request,
-                'Server successfully released back into the pool.',
-                extra_tags='alert-success')
-            return HttpResponseRedirect(reverse('shepherd:user_assets'))
-        # Otherwise return an error message
-        else:
-            messages.error(
-                request,
-                'Your user account does match the user that has checked out '
-                'this server, so you are not authorized to release it.',
-                extra_tags='alert-danger')
-            return HttpResponseRedirect(reverse('shepherd:user_assets'))
-    # If this is a POST (or any other method) redirect
-    else:
-        return HttpResponseRedirect(reverse('shepherd:user_assets'))
+        return HttpResponseRedirect(reverse("rolodex:index"))
 
 
 @login_required
 def user_assets(request):
-    """View function for displaying domains and servers checked-out for the
-    current user.
+    """
+    Display all :model:`shepherd.Domain` and :model:`shepherd.StaticServer` associated
+    with the current :model:`users.User`.
+
+    **Context**
+
+    ``domains``
+        All :model:`shepherd.Domain` associated with current :model:`users.User`
+    ``server``
+        All :model:`shepherd.StaticServer` associated with current :model:`users.User`
+
+    **Template**
+
+    :template:`checkouts_for_user.html`
     """
     # Fetch the domain history for the current user
     domains = []
-    unavailable_domains = Domain.objects.select_related(
-                            'domain_status'
-                        ).filter(
-                            domain_status__domain_status='Unavailable'
-                        )
+    unavailable_domains = Domain.objects.select_related("domain_status").filter(
+        domain_status__domain_status="Unavailable"
+    )
     for domain in unavailable_domains:
-        domain_history = History.objects.filter(
-                            domain=domain
-                        ).order_by('end_date').last()
+        domain_history = (
+            History.objects.filter(domain=domain).order_by("end_date").last()
+        )
         if domain_history:
             if domain_history.operator == request.user:
                 domains.append(domain_history)
     # Fetch the server history for the current user
     servers = []
-    unavailable_servers = StaticServer.objects.select_related(
-                            'server_status'
-                        ).filter(
-                            server_status__server_status='Unavailable'
-                        )
+    unavailable_servers = StaticServer.objects.select_related("server_status").filter(
+        server_status__server_status="Unavailable"
+    )
     for server in unavailable_servers:
-        server_history = ServerHistory.objects.filter(
-                            server=server
-                        ).order_by('end_date').last()
+        server_history = (
+            ServerHistory.objects.filter(server=server).order_by("end_date").last()
+        )
         if server_history:
             if server_history.operator == request.user:
                 servers.append(server_history)
     # Pass the context on to the custom HTML
-    context = {
-                'domains': domains,
-                'servers': servers
-                }
-    return render(request, 'shepherd/checkouts_for_user.html', context)
+    context = {"domains": domains, "servers": servers}
+    return render(request, "shepherd/checkouts_for_user.html", context)
 
 
 @login_required
 def burn(request, pk):
-    """View function for burning a domain. The Primary Key passed to this view
-    is used to look-up the requested domain.
+    """
+    Update the ``health_status``, ``domain_status``, and ``burned_explanation`` fields
+    for an individual :model:`shepherd.Domain`.
+
+    **Context**
+
+    ``form``
+        Instance of :form:`shepherd.BurnForm`
+    ``domain_instance``
+        Instance of :model:`shepherd.Domain` to be updated
+    ``domain_name``
+        Value of name field for instance of :model:`shepherd.Domain` to be updated
+    ``cancel_link``
+
+    **Template**
+
+    :template:`shepherd/burn.html`
     """
     # Fetch the domain for the provided primary key
     domain_instance = get_object_or_404(Domain, pk=pk)
     # If this is a POST request then process the form data
-    if request.method == 'POST':
+    if request.method == "POST":
         # Create a form instance and populate it with data from the request
         form = BurnForm(request.POST)
         # Check if the form is valid
         if form.is_valid():
             # Update the domain status and commit it
             domain_instance.domain_status = DomainStatus.objects.get(
-                domain_status='Burned')
+                domain_status="Burned"
+            )
             domain_instance.health_status = HealthStatus.objects.get(
-                health_status='Burned')
-            domain_instance.burned_explanation = form.cleaned_data[
-                'burned_explanation']
+                health_status="Burned"
+            )
+            domain_instance.burned_explanation = form.cleaned_data["burned_explanation"]
             domain_instance.last_used_by = request.user
             domain_instance.save()
             # Redirect to the user's checked-out domains
             messages.warning(
-                request,
-                'Domain has been marked as burned.',
-                extra_tags='alert-warning')
-            return HttpResponseRedirect(
-                '{}#collapseBurned'.format(
-                    reverse('shepherd:domain_detail',
-                        kwargs={'pk': pk}
-                    )
-                )
+                request, "Domain has been marked as burned", extra_tags="alert-warning"
             )
-            return HttpResponseRedirect(reverse(
-                'shepherd:domain_detail',
-                kwargs={'pk': pk}))
+            return HttpResponseRedirect(
+                "{}#health".format(reverse("shepherd:domain_detail", kwargs={"pk": pk}))
+            )
+            return HttpResponseRedirect(
+                reverse("shepherd:domain_detail", kwargs={"pk": pk})
+            )
     # If this is a GET (or any other method) create the default form
     else:
         form = BurnForm()
     # Prepare the context for the burn form
     context = {
-                'form': form,
-                'domain_instance': domain_instance,
-                'domain_name': domain_instance.name
-               }
+        "form": form,
+        "domain_instance": domain_instance,
+        "domain_name": domain_instance.name,
+        "cancel_link": reverse("shepherd:domain_detail", kwargs={"pk": pk}),
+    }
     # Render the burn form page
-    return render(request, 'shepherd/burn.html', context)
-
-
-@login_required
-def import_domains(request):
-    """View function for uploading and processing csv files for importing
-    domain names.
-    """
-    # If the request is 'GET' return the upload page
-    if request.method == 'GET':
-        return render(request, 'shepherd/domain_import.html')
-    # If not a GET, then proceed
-    try:
-        # Get the `csv_file` from the POSTed form data
-        csv_file = request.FILES['csv_file']
-        # Do a lame/basic check to see if this is a csv file
-        if not csv_file.name.endswith('.csv'):
-            messages.error(
-                request,
-                'Your file is not a csv!',
-                extra_tags='alert-danger')
-            return HttpResponseRedirect(reverse('shepherd:domain_import'))
-        # The file is loaded into memory, so this view must be aware of
-        # system limits
-        if csv_file.multiple_chunks():
-            messages.error(
-                request,
-                'Uploaded file is too big (%.2f MB).' %
-                (csv_file.size/(1000*1000)),
-                extra_tags='alert-danger')
-            return HttpResponseRedirect(reverse('shepherd:domain_import'))
-    except Exception as error:
-        messages.error(
-            request, 'Unable to upload/read file: ' + repr(e),
-            extra_tags='alert-danger')
-        logger.error(
-            'Unable to upload/read file – %s', error)
-    # Loop over the lines and save the domains to the Domains model
-    try:
-        # Try to read the file data
-        csv_file_wrapper = StringIO(csv_file.read().decode('utf-8'))
-        csv_reader = csv.DictReader(csv_file_wrapper, delimiter=',')
-    except Exception as error:
-        messages.error(
-            request,
-            'Unable to parse file: {}'.format(e),
-            extra_tags='alert-danger')
-        logger.error(
-            'Unable to parse file – %s', error)
-        return HttpResponseRedirect(reverse('shepherd:domain_import'))
-    try:
-        # Process each csv row and commit it to the database
-        for entry in csv_reader:
-            logger.info(
-                'Reviewing %s for entry into the database', entry['name'])
-            try:
-                health_status = HealthStatus.objects.get(
-                    health_status__iexact=entry['health_status'].strip())
-            except Exception:
-                health_status = HealthStatus.objects.get(
-                    health_status__iexact='Healthy')
-            entry['health_status'] = health_status
-            try:
-                whois_status = WhoisStatus.objects.get(
-                    whois_status__iexact=entry['whois_status'].strip())
-            except Exception:
-                whois_status = WhoisStatus.objects.get(whois_status='Enabled')
-            entry['whois_status'] = whois_status
-            # Check if the optional note field is in the csv and add it as
-            # NULL if not
-            if 'note' not in entry:
-                entry['note'] = None
-            # Check if the domain_status Foreign Key is in the csv and try to
-            # resolve the status
-            if 'domain_status' in entry:
-                try:
-                    domain_status = DomainStatus.objects.get(
-                        domain_status__iexact=entry['domain_status'].strip())
-                except Exception:
-                    domain_status = DomainStatus.objects.get(
-                        domain_status='Available')
-                entry['domain_status'] = domain_status
-            else:
-                domain_status = DomainStatus.objects.get(
-                    domain_status='Available')
-                entry['domain_status'] = domain_status
-            # Accept a variety of "True" values to mean True
-            # Thanks to @lez0sec for fixing this logic:
-            #   https://github.com/GhostManager/Ghostwriter/issues/73
-            if 'auto_renew' in entry:
-                if any(yes_option in entry['auto_renew'].lower().strip() for yes_option in ['yes', 'enabled', 'true', 'x', 'enable']):
-                    entry['auto_renew'] = True
-                else:
-                    entry['auto_renew'] = False
-            # The last_used_by field will only be set by Shepherd at check-out
-            if 'last_used_by' in entry:
-                entry['last_used_by'] = None
-            else:
-                entry['last_used_by'] = None
-            # Try to pass the dict object to the `Domain` model
-            try:
-                # First, check if a domain with this name exists
-                domain_name = entry['name'].strip()
-                try:
-                    instance = Domain.objects.get(name=domain_name)
-                except Domain.DoesNotExist:
-                    instance = False
-                if instance:
-                    # This domain already exists so update that entry
-                    logger.info(
-                         'Domain %s already in the database, so updating existing record',
-                         entry['name']
-                        )
-                    for attr, value in entry.items():
-                        setattr(instance, attr, value)
-                    instance.save()
-                else:
-                    # This is a new domain so create it
-                    new_domain = Domain(**entry)
-                    new_domain.save()
-                messages.success(
-                    request,
-                    'Successfully parsed {}'.format(entry['name']),
-                    extra_tags='alert-success')
-            # If there is an error, store as string and then display
-            except Exception as error:
-                messages.error(
-                    request,
-                    'Failed parsing {}: {}'.format(entry['name'], error),
-                    extra_tags='alert-danger')
-                logger.error('Failed parsing %s: %s', entry['name'], error)
-                pass
-    except Exception as error:
-        messages.error(
-            request,
-            'Unable to read rows: {}'.format(error),
-            extra_tags='alert-danger')
-        logger.error(
-            'Unable to read rows – %s', error)
-    return HttpResponseRedirect(reverse('shepherd:domain_import'))
-
-
-@login_required
-def import_servers(request):
-    """View function for uploading and processing csv files for importing
-    servers.
-    """
-    # If the request is 'GET' return the upload page
-    if request.method == 'GET':
-        return render(request, 'shepherd/server_import.html')
-    # If not a GET, then proceed
-    try:
-        # Get the `csv_file` from the POSTed form data
-        csv_file = request.FILES['csv_file']
-        # Do a lame/basic check to see if this is a csv file
-        if not csv_file.name.endswith('.csv'):
-            messages.error(
-                request,
-                'Your file is not a csv!',
-                extra_tags='alert-danger')
-            return HttpResponseRedirect(reverse('shepherd:server_import'))
-        # The file is loaded into memory, so this view must be aware of
-        # system limits
-        if csv_file.multiple_chunks():
-            messages.error(
-                request,
-                'Uploaded file is too big (%.2f MB).' %
-                (csv_file.size/(1000*1000)),
-                extra_tags='alert-danger')
-            return HttpResponseRedirect(reverse('shepherd:server_import'))
-    except Exception as error:
-        messages.error(
-            request,
-            'Unable to upload/read file: {}'.format(error),
-            extra_tags='alert-danger')
-        logger.error(
-            'Unable to upload/read file – %s', error)
-    # Loop over the lines and save the servers to the `StaticServer` model
-    try:
-        # Try to read the file data
-        csv_file_wrapper = StringIO(csv_file.read().decode('utf-8'))
-        csv_reader = csv.DictReader(csv_file_wrapper, delimiter=',')
-    except Exception as error:
-        messages.error(
-            request,
-            'Unable to parse file: {}',format(error),
-            extra_tags='alert-danger')
-        logger.error(
-            'Unable to parse file – %s', error)
-        return HttpResponseRedirect(reverse('shepherd:server_import'))
-    try:
-        # Process each csv row and commit it to the database
-        for entry in csv_reader:
-            #print(entry)
-            logger.info(
-                'Adding %s to the database', entry['ip_address'])
-            # Check if the optional note field is in the csv and add it as
-            # NULL if not
-            if 'note' not in entry:
-                entry['note'] = None
-            # Check if the optional name field is in the csv and add it as
-            # NULL if not
-            if 'name' not in entry:
-                entry['name'] = None
-            # Check if the server_status Foreign Key is in the csv and try to
-            # resolve the status
-            if 'server_status' in entry:
-                try:
-                    server_status = ServerStatus.objects.get(
-                        server_status__iexact=entry['server_status'])
-                except Exception:
-                    server_status = ServerStatus.objects.get(
-                        server_status='Available')
-            else:
-                server_status = ServerStatus.objects.get(
-                    server_status='Available')
-            entry['server_status'] = server_status
-            # Check if the server_status Foreign Key is in the csv and try to
-            # resolve the status
-            if 'server_provider' in entry:
-                try:
-                    server_provider = ServerProvider.objects.get(
-                        server_provider__iexact=entry['server_provider'])
-                    entry['server_provider'] = server_provider
-                except Exception:
-                    messages.error(
-                        request,
-                        'Failed parsing %s: the "%s" server provider does not '
-                        'exist in the database' %
-                        (entry['ip_address'], entry['server_provider']),
-                        extra_tags='alert-danger')
-                    continue
-            # The last_used_by field will only be set by Shepherd at
-            # server check-out
-            if 'last_used_by' in entry:
-                entry['last_used_by'] = None
-            else:
-                entry['last_used_by'] = None
-            # Try to pass the dict object to the `StaticServer` model
-            try:
-                # First, check if a server with this address exists
-                try:
-                    instance = StaticServer.objects.get(
-                        ip_address=entry['ip_address'])
-                except StaticServer.DoesNotExist:
-                    instance = False
-                if instance:
-                    # This server already exists so update that entry
-                    for attr, value in entry.items():
-                        setattr(instance, attr, value)
-                    instance.save()
-                else:
-                    # This is a new server so create it
-                    new_server = StaticServer(**entry)
-                    new_server.save()
-                messages.success(
-                    request,
-                    'Successfully parsed %s' % entry['ip_address'],
-                    extra_tags='alert-success')
-            # If there is an error, store as string and then display
-            except Exception as error:
-                messages.error(
-                    request,
-                    'Failed parsing {}: {}'.format(entry['ip_address'], error),
-                    extra_tags='alert-danger')
-                logger.error('Failed parsing %s: %s', entry['ip_address'], error)
-                pass
-    except Exception as error:
-        messages.error(
-            request,
-            'Unable to read rows: {}'.format(e),
-            extra_tags='alert-danger')
-        logger.error(
-            'Unable to read rows – ', error)
-    return HttpResponseRedirect(reverse('shepherd:server_import'))
+    return render(request, "shepherd/burn.html", context)
 
 
 @login_required
 def update(request):
-    """View function to display the control panel for updating domain
-    information.
+    """
+    Display results for latest :model:`django_q.Task` and create new instances on demand.
+
+    **Context**
+
+    ``total_domains``
+        Total of entries in :model:`shepherd.Domain`
+    ``update_time``
+        Calculated time estimate for updating health of all :model:`shepherd.Domain`
+    ``sleep_time``
+        The associated value from :model:`commandcenter.VirusTotalConfiguration`
+    ``cat_last_update_requested``
+        Start time of latest :model:`django_q.Task` for group "Domain Updates"
+    ``cat_last_update_completed``
+        End time of latest :model:`django_q.Task` for group "Domain Updates"
+    ``cat_last_update_time``
+        Total runtime of latest :model:`django_q.Task` for group "Domain Updates"
+    ``cat_last_result``
+        Result of latest :model:`django_q.Task` for group "Domain Updates"
+    ``dns_last_update_requested``
+        Start time of latest :model:`django_q.Task` for group "Domain Updates"
+    ``dns_last_update_completed``
+        End time of latest :model:`django_q.Task` for group "Domain Updates"
+    ``dns_last_update_time``
+        Total runtime of latest :model:`django_q.Task` for group "Domain Updates"
+    ``dns_last_result``
+        Result of latest :model:`django_q.Task` for group "DNS Updates"
+    ``enable_namecheap``
+        The associated value from :model:`commandcenter.NamecheapConfiguration`
+    ``namecheap_last_update_requested``
+        Start time of latest :model:`django_q.Task` for group "Namecheap Update"
+    ``namecheap_last_update_completed``
+        End time of latest :model:`django_q.Task` for group "Namecheap Update"
+    ``namecheap_last_update_time``
+        End time of latest :model:`django_q.Task` for group "Namecheap Update"
+    ``namecheap_last_result``
+        Result of latest :model:`django_q.Task` for group "Namecheap Update"
+    ``enable_cloud_monitor``
+        The associated value from :model:`commandcenter.CloudServicesConfiguration`
+    ``cloud_last_update_requested``
+        Start time of latest :model:`django_q.Task` for group "Cloud Infrastructure Review"
+    ``cloud_last_update_completed``
+        End time of latest :model:`django_q.Task` for group "Cloud Infrastructure Review"
+    ``cloud_last_update_time``
+        Total runtime of latest :model:`django_q.Task` for group "Cloud Infrastructure Review"
+    ``cloud_last_result``
+        Result of latest :model:`django_q.Task` for group "Cloud Infrastructure Review"
+
+    **Template**
+
+    :template:`shepherd/update.html`
     """
     # Check if the request is a GET
-    if request.method == 'GET':
+    if request.method == "GET":
+        # Get relevant configuration settings
+        vt_config = VirusTotalConfiguration.get_solo()
+        sleep_time = vt_config.sleep_time
+        cloud_config = CloudServicesConfiguration.get_solo()
+        enable_cloud_monitor = cloud_config.enable
+        namecheap_config = NamecheapConfiguration.get_solo()
+        enable_namecheap = namecheap_config.enable
+
         # Collect data for category updates
-        total_domains = Domain.objects.all().count()
+        cat_last_update_completed = ""
+        cat_last_update_time = ""
+        cat_last_result = ""
         try:
-            sleep_time = settings.DOMAINCHECK_CONFIG['sleep_time']
+            expired_status = DomainStatus.objects.get(domain_status="Expired")
+        except DomainStatus.DoesNotExist:
+            expired_status = None
+        total_domains = (
+            Domain.objects.all().exclude(domain_status=expired_status).count()
+        )
+        try:
             update_time = round(total_domains * sleep_time / 60, 2)
         except Exception:
             sleep_time = 20
             update_time = round(total_domains * sleep_time / 60, 2)
         try:
             # Get the latest completed task from `Domain Updates`
-            queryset = Task.objects.filter(group='Domain Updates')[0]
+            queryset = Task.objects.filter(group="Domain Updates")[0]
             # Get the task's start date and time
             cat_last_update_requested = queryset.started
             # Get the task's completed time
@@ -733,269 +853,116 @@ def update(request):
                 cat_last_update_completed = queryset.stopped
                 cat_last_update_time = round(queryset.time_taken() / 60, 2)
             else:
-                cat_last_update_completed = 'Failed'
-                cat_last_update_time = ''
+                cat_last_update_completed = "Failed"
         except Exception:
-            cat_last_update_requested = 'Updates Have Not Been Run Yet'
-            cat_last_update_completed = ''
-            cat_last_update_time = ''
-            cat_last_result = ''
+            cat_last_update_requested = "Updates Have Not Been Run Yet"
+
         # Collect data for DNS updates
+        dns_last_update_completed = ""
+        dns_last_update_time = ""
+        dns_last_result = ""
         try:
-            queryset = Task.objects.filter(group='DNS Updates')[0]
+            queryset = Task.objects.filter(group="DNS Updates")[0]
             dns_last_update_requested = queryset.started
             dns_last_result = queryset.result
             if queryset.success:
                 dns_last_update_completed = queryset.stopped
                 dns_last_update_time = round(queryset.time_taken() / 60, 2)
             else:
-                dns_last_update_completed = 'Failed'
-                dns_last_update_time = ''
+                dns_last_update_completed = "Failed"
         except Exception:
-            dns_last_update_requested = 'Updates Have Not Been Run Yet'
-            dns_last_update_completed = ''
-            dns_last_update_time = ''
-            dns_last_result = ''
+            dns_last_update_requested = "Updates Have Not Been Run Yet"
+
         # Collect data for Namecheap updates
-        enable_namecheap = settings.NAMECHEAP_CONFIG['enable_namecheap']
-        try:
-            queryset = Task.objects.filter(group='Namecheap Update')[0]
-            namecheap_last_update_requested = queryset.started
-            namecheap_last_result = queryset.result
-            if queryset.success:
-                namecheap_last_update_completed = queryset.stopped
-                namecheap_last_update_time = round(queryset.time_taken() / 60, 2)
-            else:
-                namecheap_last_update_completed = 'Failed'
-                namecheap_last_update_time = ''
-        except Exception:
-            namecheap_last_update_requested = 'A Namecheap Update Has Not Been Run Yet'
-            namecheap_last_update_completed = ''
-            namecheap_last_update_time = ''
-            namecheap_last_result = ''
+        namecheap_last_update_completed = ""
+        namecheap_last_update_time = ""
+        namecheap_last_result = ""
+        if enable_namecheap:
+            try:
+                queryset = Task.objects.filter(group="Namecheap Update")[0]
+                namecheap_last_update_requested = queryset.started
+                namecheap_last_result = queryset.result
+                if queryset.success:
+                    namecheap_last_update_completed = queryset.stopped
+                    namecheap_last_update_time = round(queryset.time_taken() / 60, 2)
+                else:
+                    namecheap_last_update_completed = "Failed"
+            except Exception:
+                namecheap_last_update_requested = "Namecheap Sync Has Not Been Run Yet"
+        else:
+            namecheap_last_update_requested = "Namecheap Syncing is Disabled"
+
         # Collect data for cloud monitoring
-        enable_cloud_monitor = settings.CLOUD_SERVICE_CONFIG['enable_cloud_monitor']
-        try:
-            queryset = Task.objects.filter(group='Cloud Infrastructure Review')[0]
-            cloud_last_update_requested = queryset.started
-            cloud_last_result = queryset.result
-            if queryset.success:
-                cloud_last_update_completed = queryset.stopped
-                cloud_last_update_time = round(queryset.time_taken() / 60, 2)
-            else:
-                cloud_last_update_completed = 'Failed'
-                cloud_last_update_time = ''
-        except Exception:
-            cloud_last_update_requested = 'A Namecheap Update Has Not Been Run Yet'
-            cloud_last_update_completed = ''
-            cloud_last_update_time = ''
-            cloud_last_result = ''
+        cloud_last_update_completed = ""
+        cloud_last_update_time = ""
+        cloud_last_result = ""
+        if enable_cloud_monitor:
+            try:
+                queryset = Task.objects.filter(group="Cloud Infrastructure Review")[0]
+                cloud_last_update_requested = queryset.started
+                cloud_last_result = queryset.result
+                if queryset.success:
+                    cloud_last_update_completed = queryset.stopped
+                    cloud_last_update_time = round(queryset.time_taken() / 60, 2)
+                else:
+                    cloud_last_update_completed = "Failed"
+            except Exception:
+                cloud_last_update_requested = "Cloud Review Has Not Been Run Yet"
+        else:
+            cloud_last_update_requested = "Cloud Services are Disabled"
         # Assemble context for the page
         context = {
-                    'total_domains': total_domains,
-                    'update_time': update_time,
-                    'sleep_time': sleep_time,
-                    'cat_last_update_requested': cat_last_update_requested,
-                    'cat_last_update_completed': cat_last_update_completed,
-                    'cat_last_update_time': cat_last_update_time,
-                    'cat_last_result': cat_last_result,
-                    'dns_last_update_requested': dns_last_update_requested,
-                    'dns_last_update_completed': dns_last_update_completed,
-                    'dns_last_update_time': dns_last_update_time,
-                    'dns_last_result': dns_last_result,
-                    'enable_namecheap': enable_namecheap,
-                    'namecheap_last_update_requested': namecheap_last_update_requested,
-                    'namecheap_last_update_completed': namecheap_last_update_completed,
-                    'namecheap_last_update_time': namecheap_last_update_time,
-                    'namecheap_last_result': namecheap_last_result,
-                    'enable_cloud_monitor': enable_cloud_monitor,
-                    'cloud_last_update_requested': cloud_last_update_requested,
-                    'cloud_last_update_completed': cloud_last_update_completed,
-                    'cloud_last_update_time': cloud_last_update_time,
-                    'cloud_last_result': cloud_last_result
-                }
-        return render(request, 'shepherd/update.html', context=context)
+            "total_domains": total_domains,
+            "update_time": update_time,
+            "sleep_time": sleep_time,
+            "cat_last_update_requested": cat_last_update_requested,
+            "cat_last_update_completed": cat_last_update_completed,
+            "cat_last_update_time": cat_last_update_time,
+            "cat_last_result": cat_last_result,
+            "dns_last_update_requested": dns_last_update_requested,
+            "dns_last_update_completed": dns_last_update_completed,
+            "dns_last_update_time": dns_last_update_time,
+            "dns_last_result": dns_last_result,
+            "enable_namecheap": enable_namecheap,
+            "namecheap_last_update_requested": namecheap_last_update_requested,
+            "namecheap_last_update_completed": namecheap_last_update_completed,
+            "namecheap_last_update_time": namecheap_last_update_time,
+            "namecheap_last_result": namecheap_last_result,
+            "enable_cloud_monitor": enable_cloud_monitor,
+            "cloud_last_update_requested": cloud_last_update_requested,
+            "cloud_last_update_completed": cloud_last_update_completed,
+            "cloud_last_update_time": cloud_last_update_time,
+            "cloud_last_result": cloud_last_result,
+        }
+        return render(request, "shepherd/update.html", context=context)
     else:
-        return HttpResponseRedirect(reverse('shepherd:update'))
+        return HttpResponseRedirect(reverse("shepherd:update"))
 
 
-@login_required
-def update_cat(request):
-    """View function to schedule a background task to update domain
-    categories.
+def export_domains_to_csv(request):
     """
-    # Check if the request is a POST and proceed with the task
-    if request.method == 'POST':
-        # Add an async task grouped as `Domain Updates`
-        try:
-            task_id = async_task(
-                'ghostwriter.shepherd.tasks.check_domains',
-                group='Domain Updates',
-                hook='ghostwriter.shepherd.tasks.send_slack_complete_msg')
-            messages.success(
-                request,
-                'Domain category update task (Task ID {}) has been '
-                'successfully queued.'.
-                format(task_id),
-                extra_tags='alert-success')
-        except Exception:
-            messages.error(
-                request,
-                'Domain category update task could not be queued. Is the AMQP '
-                'server running?',
-                extra_tags='alert-danger')
-    return HttpResponseRedirect(reverse('shepherd:update'))
-
-
-@login_required
-def update_cat_single(request, pk):
-    """View function to schedule a background task to update one domain's
-    categories.
+    Export all :model:`shepherd.Domain` to a csv file for download.
     """
-    # Check if the request is a POST and proceed with the task
-    if request.method == 'GET':
-        # Add an async task grouped as `Domain Updates`
-        try:
-            virustotal_api_key = settings.DOMAINCHECK_CONFIG[
-                'virustotal_api_key']
-        except Exception:
-            virustotal_api_key = None
-        try:
-            task_id = async_task(
-                'ghostwriter.shepherd.tasks.check_domains',
-                domain=pk,
-                group='Domain Updates',
-                hook='ghostwriter.shepherd.tasks.send_slack_complete_msg')
-            if virustotal_api_key:
-                messages.success(
-                    request,
-                    'Domain category update task (Task ID {}) has been '
-                    'successfully queued. Refresh this page in a few minutes.'.
-                    format(task_id),
-                    extra_tags='alert-success')
-            else:
-                messages.success(
-                    request,
-                    'Domain category update task (Task ID {}) has been '
-                    'successfully queued. Refresh this page in a few '
-                    'minutes. A VirusTotal API key is not configured so '
-                    'checks will exclude VirusTotal and passive DNS.'.
-                    format(task_id),
-                    extra_tags='alert-success')
-        except Exception:
-            messages.error(
-                request,
-                'Domain category update task could not be queued. '
-                'Is the AMQP server running?',
-                extra_tags='alert-danger')
-    return HttpResponseRedirect('{}#collapseHealth'.format(reverse('shepherd:domain_detail', kwargs={'pk': pk})))
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    domain_resource = DomainResource()
+    dataset = domain_resource.export()
+    response = HttpResponse(dataset.csv, content_type="text/csv")
+    response["Content-Disposition"] = f"attachment; filename={timestamp}_findings.csv"
+
+    return response
 
 
-@login_required
-def update_dns(request):
-    """View function to schedule a background task to update domain DNS
-    records.
+def export_servers_to_csv(request):
     """
-    # Check if the request is a POST and proceed with the task
-    if request.method == 'POST':
-        # Add an async task grouped as `DNS Updates`
-        try:
-            task_id = async_task(
-                'ghostwriter.shepherd.tasks.update_dns',
-                group='DNS Updates',
-                hook='ghostwriter.shepherd.tasks.send_slack_complete_msg')
-            messages.success(
-                request,
-                'DNS update task (Task ID {}) has been successfully queued.'.
-                format(task_id),
-                extra_tags='alert-success')
-        except Exception:
-            messages.error(
-                request,
-                'DNS update task could not be queued. '
-                'Is the AMQP server running?',
-                extra_tags='alert-danger')
-    return HttpResponseRedirect(reverse('shepherd:update'))
-
-
-@login_required
-def update_dns_single(request, pk):
-    """View function to schedule a background task to update one domain's DNS
-    records.
+    Export all :model:`shepherd.Server` to a csv file for download.
     """
-    # Check if the request is a POST and proceed with the task
-    if request.method == 'GET':
-        # Add an async task grouped as `DNS Updates`
-        try:
-            task_id = async_task(
-                'ghostwriter.shepherd.tasks.update_dns',
-                domain=pk,
-                group='Individual DNS Update',
-                hook='ghostwriter.shepherd.tasks.send_slack_complete_msg')
-            messages.success(
-                request,
-                'DNS update task (Task ID {}) has been successfully queued. '
-                'Refresh this page in a minute or two.'.format(task_id),
-                extra_tags='alert-success')
-        except Exception:
-            messages.error(
-                request,
-                'DNS update task could not be queued. Is the AMQP server '
-                'running?',
-                extra_tags='alert-danger')
-    return HttpResponseRedirect('{}#collapseDNS'.format(reverse('shepherd:domain_detail', kwargs={'pk': pk})))
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    server_resource = StaticServerResource()
+    dataset = server_resource.export()
+    response = HttpResponse(dataset.csv, content_type="text/csv")
+    response["Content-Disposition"] = f"attachment; filename={timestamp}_findings.csv"
 
-
-@login_required
-def pull_domains_namecheap(request):
-    """View function to schedule a background task to update the domain
-    library from Namecheap.
-    """
-    # Check if the request is a POST and proceed with the task
-    if request.method == 'POST':
-        # Add an async task grouped as `Namecheap Update`
-        try:
-            task_id = async_task(
-                'ghostwriter.shepherd.tasks.fetch_namecheap_domains',
-                group='Namecheap Update')
-            messages.success(
-                request,
-                'Namecheap update task (Task ID {}) has been successfully queued.'.
-                format(task_id),
-                extra_tags='alert-success')
-        except Exception:
-            messages.error(
-                request,
-                'Namecheap update task could not be queued. '
-                'Is the AMQP server running?',
-                extra_tags='alert-danger')
-    return HttpResponseRedirect(reverse('shepherd:update'))
-
-
-@login_required
-def check_cloud_infrastructure(request):
-    """View function to schedule a background task to perform a cloud
-    infrastructure review.
-    """
-    # Check if the request is a POST and proceed with the task
-    if request.method == 'POST':
-        # Add an async task grouped as `Cloud Infrastructure Review`
-        try:
-            task_id = async_task(
-                'ghostwriter.shepherd.tasks.review_cloud_infrastructure',
-                group='Cloud Infrastructure Review')
-            messages.success(
-                request,
-                'Cloud monitor task (Task ID {}) has been successfully queued.'.
-                format(task_id),
-                extra_tags='alert-success')
-        except Exception:
-            messages.error(
-                request,
-                'Cloud monitor task could not be queued. '
-                'Is the AMQP server running?',
-                extra_tags='alert-danger')
-    return HttpResponseRedirect(reverse('shepherd:update'))
+    return response
 
 
 ################
@@ -1003,830 +970,931 @@ def check_cloud_infrastructure(request):
 ################
 
 
-class GraveyardListView(LoginRequiredMixin, generic.ListView):
-    """View showing only burned and retired domains. This view calls the
-    graveyard.html template.
+class DomainDetailView(LoginRequiredMixin, DetailView):
     """
-    model = Domain
-    template_name = 'shepherd/graveyard.html'
-    paginate_by = 100
+    Display an individual :model:`shepherd.Domain`.
 
-    def get_queryset(self):
-        """Customize the queryset based on search."""
-        queryset = super(GraveyardListView, self).get_queryset()
-        return queryset.select_related('domain_status', 'whois_status',
-                                       'health_status').\
-            filter(Q(domain_status__domain_status='Burned') |
-                   Q(health_status__health_status='Burned')).order_by('name')
+    **Template**
 
-
-class DomainDetailView(LoginRequiredMixin, generic.DetailView):
-    """View showing the details for the specified domain. This view defaults
-    to the domain_detail.html template.
+    :template:`shepherd/domain_detail.html`
     """
+
     model = Domain
 
 
 class HistoryCreate(LoginRequiredMixin, CreateView):
-    """View for creating new project history entries. This view defaults to
-    the checkout.html template.
     """
+    Create an individual :model:`shepherd.History`.
+
+    **Context**
+
+    ``domain_name``
+        Uppercase version of the domain name
+    ``cancel_link``
+        Link for the form's Cancel button to return to domain's detail page
+
+    **Template**
+
+    :template:`shepherd/checkout.html`
+    """
+
     model = History
     form_class = CheckoutForm
-    template_name = 'shepherd/checkout.html'
+    template_name = "shepherd/checkout.html"
 
     def get_initial(self):
-        """Set the initial values for the form."""
-        self.domain = get_object_or_404(Domain, pk=self.kwargs.get('pk'))
+        self.domain = get_object_or_404(Domain, pk=self.kwargs.get("pk"))
         return {
-                'domain': self.domain,
-                'operator': self.request.user,
-               }
+            "domain": self.domain,
+            "operator": self.request.user,
+        }
 
     def form_valid(self, form):
-        """Override form_valid to perform additional actions on new entries."""
         # Update the domain status and commit it
-        domain_instance = get_object_or_404(Domain, pk=self.kwargs.get('pk'))
+        domain_instance = get_object_or_404(Domain, pk=self.kwargs.get("pk"))
         domain_instance.last_used_by = self.request.user
         domain_instance.domain_status = DomainStatus.objects.get(
-            domain_status='Unavailable')
+            domain_status="Unavailable"
+        )
         domain_instance.save()
         return super().form_valid(form)
 
     def get_success_url(self):
-        """Override the function to return to the domain after creation."""
         messages.success(
-            self.request,
-            'Domain successfully checked-out.',
-            extra_tags='alert-success')
-        return '{}#collapseInfra'.format(reverse('rolodex:project_detail', kwargs={'pk': self.object.project.pk}))
+            self.request, "Domain successfully checked-out", extra_tags="alert-success"
+        )
+        return "{}#infrastructure".format(
+            reverse("rolodex:project_detail", kwargs={"pk": self.object.project.pk})
+        )
 
     def get_context_data(self, **kwargs):
-        """Override the `get_context_data()` function to provide additional
-        information.
-        """
         ctx = super(HistoryCreate, self).get_context_data(**kwargs)
-        ctx['domain_name'] = self.domain.name.upper()
+        ctx["domain_name"] = self.domain.name.upper()
+        ctx["domain"] = self.domain
+        ctx["cancel_link"] = reverse(
+            "shepherd:domain_detail", kwargs={"pk": self.kwargs.get("pk")}
+        )
         return ctx
 
 
 class HistoryUpdate(LoginRequiredMixin, UpdateView):
-    """View for updating existing project history entries. This view defaults
-    to the checkout.html template.
     """
+    Update an individual :model:`shepherd.History`.
+
+    **Context**
+
+    ``domain_name``
+        Uppercase version of the domain name
+    ``cancel_link``
+        Link for the form's Cancel button to return to domain's detail page
+
+    **Template**
+
+    :template:`shepherd/checkout.html`
+    """
+
     model = History
     form_class = CheckoutForm
-    template_name = 'shepherd/checkout.html'
+    template_name = "shepherd/checkout.html"
 
     def get_success_url(self):
-        """Override the function to return to the parent record after updating."""
         messages.success(
             self.request,
-            'Domain history successfully updated.',
-            extra_tags='alert-success')
-        next_url = self.request.POST.get('next', '/')
-        if next_url:
-            if '/domains/' in next_url:
-                return '{}#collapseProject'.format(next_url)
-            elif '/projects/' in next_url:
-                return '{}#collapseInfra'.format(next_url)
-            else:
-                return '{}#collapseProject'.format(reverse('shepherd:domain_detail', kwargs={'pk': self.object.domain.id}))
-        else:
-            return '{}#collapseProject'.format(reverse('shepherd:domain_detail', kwargs={'pk': self.object.domain.id}))
+            "Domain history successfully updated",
+            extra_tags="alert-success",
+        )
+        return "{}#history".format(
+            reverse("shepherd:domain_detail", kwargs={"pk": self.object.domain.id})
+        )
 
     def get_context_data(self, **kwargs):
-        """Override the `get_context_data()` function to provide additional
-        information.
-        """
         ctx = super(HistoryUpdate, self).get_context_data(**kwargs)
-        ctx['domain_name'] = self.object.domain.name.upper()
-        ctx['origin'] = self.request.META.get('HTTP_REFERER')
+        ctx["domain_name"] = self.object.domain.name.upper()
+        ctx["cancel_link"] = "{}#history".format(
+            reverse("shepherd:domain_detail", kwargs={"pk": self.object.domain.id})
+        )
         return ctx
 
 
 class HistoryDelete(LoginRequiredMixin, DeleteView):
-    """View for deleting existing project history entries. This view defaults
-    to the confirm_delete.html template.
     """
+    Delete an individual :model:`shepherd.History`.
+
+    **Context**
+
+    ``object_type``
+        A string describing what is to be deleted
+    ``object_to_be_deleted``
+        The to-be-deleted instance of :model:`shepherd.History`
+    ``cancel_link``
+        Link for the form's Cancel button to return to domain's detail page
+
+    **Template**
+
+    :template:`ghostwriter/confirm_delete.html`
+    """
+
     model = History
-    template_name = 'confirm_delete.html'
+    template_name = "confirm_delete.html"
 
     def get_success_url(self):
-        """Override the function to return to the domain after deletion."""
         messages.warning(
             self.request,
-            'Project history successfully deleted.',
-            extra_tags='alert-warning')
-        next_url = self.request.POST.get('next', '/')
-        if next_url:
-            if '/domains/' in next_url:
-                return '{}#collapseProject'.format(next_url)
-            elif '/projects/' in next_url:
-                return '{}#collapseInfra'.format(next_url)
-            else:
-                return '{}#collapseProject'.format(reverse('shepherd:domain_detail', kwargs={'pk': self.object.domain.id}))
-        else:
-            return '{}#collapseProject'.format(reverse('shepherd:domain_detail', kwargs={'pk': self.object.domain.id}))
+            "Project history successfully deleted",
+            extra_tags="alert-warning",
+        )
+        return "{}#history".format(
+            reverse("shepherd:domain_detail", kwargs={"pk": self.object.domain.id})
+        )
 
     def get_context_data(self, **kwargs):
-        """Override the `get_context_data()` function to provide additional
-        information.
-        """
         ctx = super(HistoryDelete, self).get_context_data(**kwargs)
-        queryset = kwargs['object']
-        ctx['object_type'] = 'domain checkout'
-        ctx['object_to_be_deleted'] = queryset
-        ctx['origin'] = self.request.META.get('HTTP_REFERER')
+        queryset = kwargs["object"]
+        ctx["object_type"] = "domain checkout"
+        ctx["object_to_be_deleted"] = queryset
+        ctx["cancel_link"] = "{}#history".format(
+            reverse("shepherd:domain_detail", kwargs={"pk": self.object.domain.id})
+        )
         return ctx
 
     def delete(self, request, *args, **kwargs):
-        """Override function to update domain status after deleting the
-        history entry.
-        """
         self.object = self.get_object()
-        latest_history_entry = History.objects.filter(domain=self.object.domain).latest('id')
+        latest_history_entry = History.objects.filter(domain=self.object.domain).latest(
+            "id"
+        )
         if self.object == latest_history_entry:
-            domain_instance = Domain.objects.\
-                get(pk=self.object.domain.id)
-            domain_instance.domain_status = DomainStatus.objects.\
-                get(domain_status='Available')
+            domain_instance = Domain.objects.get(pk=self.object.domain.id)
+            domain_instance.domain_status = DomainStatus.objects.get(
+                domain_status="Available"
+            )
             domain_instance.save()
         return super(HistoryDelete, self).delete(request, *args, **kwargs)
 
 
 class DomainCreate(LoginRequiredMixin, CreateView):
-    """View for creating new domain name entries. This view defaults to the
-    domain_form.html template.
     """
+    Create an individual :model:`shepherd.Domain`.
+
+    **Context**
+
+    ``cancel_link``
+        Link for the form's Cancel button to return to domains list page
+
+    **Template**
+
+    :template:`shepherd/domain_form.html`
+    """
+
     model = Domain
-    form_class = DomainCreateForm
+    form_class = DomainForm
 
     def get_success_url(self):
-        """Override the function to show the new domain after creation."""
         messages.success(
-            self.request,
-            'Domain successfully created.',
-            extra_tags='alert-success')
-        return reverse('shepherd:domain_detail', kwargs={'pk': self.object.pk})
-
-
-class DomainUpdate(LoginRequiredMixin, UpdateView):
-    """View for updating existing domain name entries. This view defaults to the
-    domain_form.html template.
-    """
-    model = Domain
-    fields = '__all__'
-
-    def get_success_url(self):
-        """Override the function to return to the domain after updating."""
-        messages.success(
-            self.request,
-            'Domain successfully updated.',
-            extra_tags='alert-success')
-        return reverse('shepherd:domain_detail', kwargs={'pk': self.object.id})
-
-
-class DomainDelete(LoginRequiredMixin, DeleteView):
-    """View for deleting existing domain name entries. This view defaults to
-    the confirm_delete.html template.
-    """
-    model = Domain
-    template_name = 'confirm_delete.html'
-
-    def get_success_url(self):
-        """Override the function to return to the domain list after deletion."""
-        messages.warning(
-            self.request,
-            'Domain successfully deleted.',
-            extra_tags='alert-warning')
-        return reverse('shepherd:domains')
+            self.request, "Domain successfully created", extra_tags="alert-success"
+        )
+        return reverse("shepherd:domain_detail", kwargs={"pk": self.object.pk})
 
     def get_context_data(self, **kwargs):
-        """Override the `get_context_data()` function to provide additional
-        information.
-        """
-        ctx = super(DomainDelete, self).get_context_data(**kwargs)
-        queryset = kwargs['object']
-        ctx['object_type'] = 'domain'
-        ctx['object_to_be_deleted'] = queryset.name.upper()
+        ctx = super(DomainCreate, self).get_context_data(**kwargs)
+        ctx["cancel_link"] = reverse("shepherd:domains")
         return ctx
 
 
-class ServerDetailView(LoginRequiredMixin, generic.DetailView):
-    """View showing the details for the specified server. This view defaults to the
-    server_detail.html template.
+class DomainUpdate(LoginRequiredMixin, UpdateView):
     """
-    model = StaticServer
-    template_name = 'shepherd/server_detail.html'
+    Update an individual :model:`shepherd.Domain`.
+
+    **Context**
+
+    ``cancel_link``
+        Link for the form's Cancel button to return to domain's details page
+
+    **Template**
+
+    :template:`shepherd/domain_form.html`
+    """
+
+    model = Domain
+    form_class = DomainForm
+
+    def get_success_url(self):
+        messages.success(
+            self.request, "Domain successfully updated", extra_tags="alert-success"
+        )
+        return reverse("shepherd:domain_detail", kwargs={"pk": self.object.id})
 
     def get_context_data(self, **kwargs):
-        """Override the `get_context_data()` function to provide additional
-        information.
-        """
+        ctx = super(DomainUpdate, self).get_context_data(**kwargs)
+        ctx["cancel_link"] = reverse(
+            "shepherd:domain_detail", kwargs={"pk": self.object.id}
+        )
+        return ctx
+
+
+class DomainDelete(LoginRequiredMixin, DeleteView):
+    """
+    Delete an individual :model:`shepherd.Domain`.
+
+    **Context**
+
+    ``object_type``
+        A string describing what is to be deleted
+    ``object_to_be_deleted``
+        The to-be-deleted instance of :model:`shepherd.Domain`
+    ``cancel_link``
+        Link for the form's Cancel button to return to domain's details page
+
+    **Template**
+
+    :template:`ghostwriter/confirm_delete.html`
+    """
+
+    model = Domain
+    template_name = "confirm_delete.html"
+
+    def get_success_url(self):
+        messages.warning(
+            self.request, "Domain successfully deleted", extra_tags="alert-warning"
+        )
+        return reverse("shepherd:domains")
+
+    def get_context_data(self, **kwargs):
+        ctx = super(DomainDelete, self).get_context_data(**kwargs)
+        queryset = kwargs["object"]
+        ctx["object_type"] = "domain"
+        ctx["object_to_be_deleted"] = queryset.name.upper()
+        ctx["cancel_link"] = reverse(
+            "shepherd:domain_detail", kwargs={"pk": self.object.id}
+        )
+        return ctx
+
+
+class ServerDetailView(LoginRequiredMixin, DetailView):
+    """
+    Display an individual :model:`shepherd.StaticServer`.
+
+    **Context**
+
+    ``primary_address``
+        Primary IP address from :model:`shepherd.AuxServerAddress` for :model:`shepherd.SaticServer`
+
+    **Template**
+
+    :template:`shepherd/server_detail.html`
+    """
+
+    model = StaticServer
+    template_name = "shepherd/server_detail.html"
+
+    def get_context_data(self, **kwargs):
         ctx = super(ServerDetailView, self).get_context_data(**kwargs)
-        queryset = kwargs['object']
-        ctx['primary_address'] = queryset.ip_address
+        queryset = kwargs["object"]
+        ctx["primary_address"] = queryset.ip_address
         aux_addresses = AuxServerAddress.objects.filter(static_server=queryset)
         for address in aux_addresses:
             if address.primary:
-                ctx['primary_address'] = address.ip_address
+                ctx["primary_address"] = address.ip_address
         return ctx
 
 
 class ServerCreate(LoginRequiredMixin, CreateView):
-    """View for creating new server entries. This view defaults to the
-    server_form.html template.
     """
+    Create an individual :model:`shepherd.StaticServer`.
+
+    **Context**
+
+    ``addresses``
+        Instance of the `ServerAddressFormSet()` formset
+    ``cancel_link``
+        Link for the form's Cancel button to return to servers list page
+
+    **Template**
+
+    :template:`shepherd/server_form.html`
+    """
+
     model = StaticServer
-    template_name = 'shepherd/server_form.html'
-    form_class = ServerCreateForm
+    template_name = "shepherd/server_form.html"
+    form_class = ServerForm
 
     def get_success_url(self):
-        """Override the function to show the new server after creation."""
         messages.success(
-            self.request,
-            'Server successfully created.',
-            extra_tags='alert-success')
-        return reverse('shepherd:server_detail', kwargs={'pk': self.object.pk})
+            self.request, "Server successfully created", extra_tags="alert-success"
+        )
+        return reverse("shepherd:server_detail", kwargs={"pk": self.object.pk})
+
+    def get_context_data(self, **kwargs):
+        ctx = super(ServerCreate, self).get_context_data(**kwargs)
+        ctx["cancel_link"] = reverse("shepherd:servers")
+        if self.request.POST:
+            ctx["addresses"] = ServerAddressFormSet(self.request.POST, prefix="address")
+        else:
+            ctx["addresses"] = ServerAddressFormSet(prefix="address")
+        return ctx
+
+    def form_valid(self, form):
+        # Get form context data – used for validation of inline forms
+        ctx = self.get_context_data()
+        addresses = ctx["addresses"]
+
+        # Now validate inline formsets
+        # Validation is largely handled by the custom base formset, ``BaseServerAddressInlineFormSet``
+        try:
+            with transaction.atomic():
+                # Save the parent form – will rollback if a child fails validation
+                self.object = form.save()
+                addresses_valid = addresses.is_valid()
+                if addresses_valid:
+                    addresses.instance = self.object
+                    addresses.save()
+                if form.is_valid() and addresses_valid:
+                    return super().form_valid(form)
+                else:
+                    # Raise an error to rollback transactions
+                    raise forms.ValidationError(_("Invalid form data"))
+        # Otherwise return `form_invalid` and display errors
+        except Exception as exception:
+            template = "An exception of type {0} occurred. Arguments:\n{1!r}"
+            message = template.format(type(exception).__name__, exception.args)
+            logger.error(message)
+            return super(ServerCreate, self).form_invalid(form)
 
 
 class ServerUpdate(LoginRequiredMixin, UpdateView):
-    """View for updating existing server entries. This view defaults to the
-    server_form.html template.
     """
+    Update an individual :model:`shepherd.StaticServer`.
+
+    **Context**
+
+    ``addresses``
+        Instance of the `ServerAddressFormSet()` formset
+    ``cancel_link``
+        Link for the form's Cancel button to return to servers list page
+
+    **Template**
+
+    :template:`shepherd/server_form.html`
+    """
+
     model = StaticServer
-    template_name = 'shepherd/server_form.html'
-    fields = '__all__'
+    template_name = "shepherd/server_form.html"
+    form_class = ServerForm
 
     def get_success_url(self):
-        """Override the function to return to the server after updating."""
         messages.success(
-            self.request,
-            'Server successfully updated.',
-            extra_tags='alert-success')
-        return reverse('shepherd:server_detail', kwargs={'pk': self.object.id})
+            self.request, "Server successfully updated", extra_tags="alert-success"
+        )
+        return reverse("shepherd:server_detail", kwargs={"pk": self.object.pk})
+
+    def get_context_data(self, **kwargs):
+        ctx = super(ServerUpdate, self).get_context_data(**kwargs)
+        ctx["cancel_link"] = reverse(
+            "shepherd:server_detail", kwargs={"pk": self.object.pk}
+        )
+        if self.request.POST:
+            ctx["addresses"] = ServerAddressFormSet(
+                self.request.POST, prefix="address", instance=self.object
+            )
+        else:
+            ctx["addresses"] = ServerAddressFormSet(
+                prefix="address", instance=self.object
+            )
+        return ctx
+
+    def form_valid(self, form):
+        # Get form context data – used for validation of inline forms
+        ctx = self.get_context_data()
+        addresses = ctx["addresses"]
+
+        # Now validate inline formsets
+        # Validation is largely handled by the custom base formset, ``BaseServerAddressInlineFormSet``
+        try:
+            with transaction.atomic():
+                # Save the parent form – will rollback if a child fails validation
+                self.object = form.save()
+                addresses_valid = addresses.is_valid()
+                if addresses_valid:
+                    addresses.instance = self.object
+                    addresses.save()
+                if form.is_valid() and addresses_valid:
+                    return super().form_valid(form)
+                else:
+                    # Raise an error to rollback transactions
+                    raise forms.ValidationError(_("Invalid form data"))
+        # Otherwise return `form_invalid` and display errors
+        except Exception as exception:
+            template = "An exception of type {0} occurred. Arguments:\n{1!r}"
+            message = template.format(type(exception).__name__, exception.args)
+            logger.error(message)
+            return super(ServerUpdate, self).form_invalid(form)
 
 
 class ServerDelete(LoginRequiredMixin, DeleteView):
-    """View for deleting existing server entries. This view defaults to the
-    confirm_delete.html template.
     """
+    Delete an individual :model:`shepherd.StaticServer`.
+
+    **Context**
+
+    ``object_type``
+        A string describing what is to be deleted
+    ``object_to_be_deleted``
+        The to-be-deleted instance of :model:`shepherd.StaticServer`
+    ``cancel_link``
+        Link for the form's Cancel button to return to server's details page
+
+    **Template**
+
+    :template:`ghostwriter/confirm_delete.html`
+    """
+
     model = StaticServer
-    template_name = 'confirm_delete.html'
+    template_name = "confirm_delete.html"
 
     def get_success_url(self):
-        """Override the function to return to the server list after
-        deletion.
-        """
         messages.warning(
-            self.request,
-            'Server successfully deleted.',
-            extra_tags='alert-warning')
-        return reverse('shepherd:servers')
+            self.request, "Server successfully deleted", extra_tags="alert-warning"
+        )
+        return reverse("shepherd:servers")
 
     def get_context_data(self, **kwargs):
-        """Override the `get_context_data()` function to provide additional
-        information.
-        """
         ctx = super(ServerDelete, self).get_context_data(**kwargs)
-        queryset = kwargs['object']
-        ctx['object_type'] = 'static server'
-        ctx['object_to_be_deleted'] = queryset.ip_address
+        queryset = kwargs["object"]
+        ctx["object_type"] = "static server"
+        ctx["object_to_be_deleted"] = queryset.ip_address
+        ctx["cancel_link"] = reverse(
+            "shepherd:server_detail", kwargs={"pk": self.object.id}
+        )
         return ctx
 
 
 class ServerHistoryCreate(LoginRequiredMixin, CreateView):
-    """View for creating new server history entries. This view defaults to the
-    server_checkout.html template.
     """
+    Create an individual :model:`shepherd.ServerHistory`.
+
+    **Context**
+
+    ``cancel_link``
+        Link for the form's Cancel button to return to server's details page
+
+    **Template**
+
+    :template:`shepherd/server_checkout.html`
+    """
+
     model = ServerHistory
     form_class = ServerCheckoutForm
-    template_name = 'shepherd/server_checkout.html'
+    template_name = "shepherd/server_checkout.html"
 
     def get_initial(self):
-        """Set the initial values for the form."""
-        self.server = get_object_or_404(StaticServer, pk=self.kwargs.get('pk'))
+        self.server = get_object_or_404(StaticServer, pk=self.kwargs.get("pk"))
         return {
-                'server': self.server,
-                'operator': self.request.user,
-               }
+            "server": self.server,
+            "operator": self.request.user,
+        }
 
     def form_valid(self, form):
-        """Override form_valid to perform additional actions on new entries."""
         # Update the domain status and commit it
-        server_instance = get_object_or_404(
-            StaticServer, pk=self.kwargs.get('pk'))
+        server_instance = get_object_or_404(StaticServer, pk=self.kwargs.get("pk"))
         server_instance.last_used_by = self.request.user
         server_instance.server_status = ServerStatus.objects.get(
-            server_status='Unavailable')
+            server_status="Unavailable"
+        )
         server_instance.save()
         return super().form_valid(form)
 
     def get_success_url(self):
-        """Override the function to return to the domain after creation."""
         messages.success(
-            self.request,
-            'Server successfully checked-out.',
-            extra_tags='alert-success')
+            self.request, "Server successfully checked-out", extra_tags="alert-success"
+        )
         # return reverse('shepherd:user_assets')
-        return '{}#collapseInfra'.format(reverse('rolodex:project_detail', kwargs={'pk': self.object.project.pk}))
+        return "{}#infrastructure".format(
+            reverse("rolodex:project_detail", kwargs={"pk": self.object.project.pk})
+        )
 
     def get_context_data(self, **kwargs):
-        """Override the `get_context_data()` function to provide additional
-        information.
-        """
         ctx = super(ServerHistoryCreate, self).get_context_data(**kwargs)
-        ctx['server_name'] = self.server.ip_address
+        ctx["server_instance"] = self.server
+        ctx["cancel_link"] = reverse(
+            "shepherd:server_detail", kwargs={"pk": self.kwargs.get("pk")}
+        )
         return ctx
 
 
 class ServerHistoryUpdate(LoginRequiredMixin, UpdateView):
-    """View for updating existing server history entries. This view defaults
-    to the server_checkout.html template.
     """
+    Update an individual :model:`shepherd.ServerHistory`.
+
+    **Context**
+
+    ``cancel_link``
+        Link for the form's Cancel button to return to server's details page
+
+    **Template**
+
+    :template:`shepherd/server_checkout.html`
+    """
+
     model = ServerHistory
     form_class = ServerCheckoutForm
-    template_name = 'shepherd/server_checkout.html'
+    template_name = "shepherd/server_checkout.html"
 
     def get_success_url(self):
-        """Override the function to return to the domain after updating."""
         messages.success(
             self.request,
-            'Server history successfully updated.',
-            extra_tags='alert-success')
-        return '{}#collapseInfra'.format(reverse('rolodex:project_detail', kwargs={'pk': self.object.project.pk}))
+            "Server history successfully updated",
+            extra_tags="alert-success",
+        )
+        return "{}#infrastructure".format(
+            reverse("rolodex:project_detail", kwargs={"pk": self.object.project.pk})
+        )
 
     def get_context_data(self, **kwargs):
-        """Override the `get_context_data()` function to provide additional
-        information.
-        """
         ctx = super(ServerHistoryUpdate, self).get_context_data(**kwargs)
-        ctx['server_name'] = self.object.server.ip_address
+        ctx["cancel_link"] = reverse(
+            "rolodex:project_detail", kwargs={"pk": self.object.project.pk}
+        )
         return ctx
 
 
 class ServerHistoryDelete(LoginRequiredMixin, DeleteView):
-    """View for deleting existing server history entries. This view defaults
-    to the confirm_delete.html template.
     """
+    Delete an individual :model:`shepherd.ServerHistory`.
+
+    **Context**
+
+    ``object_type``
+        A string describing what is to be deleted
+    ``object_to_be_deleted``
+        The to-be-deleted instance of :model:`shepherd.ServerHistory`
+    ``cancel_link``
+        Link for the form's Cancel button to return to server's details page
+
+    **Template**
+
+    :template:`ghostwriter/confirm_delete.html`
+    """
+
     model = ServerHistory
-    template_name = 'confirm_delete.html'
-    success_url = reverse_lazy('shepherd:domains')
+    template_name = "confirm_delete.html"
+    success_url = reverse_lazy("shepherd:domains")
 
     def get_success_url(self):
-        """Override the function to return to the domain after deletion."""
         messages.warning(
             self.request,
-            'Server history successfully deleted.',
-            extra_tags='alert-warning')
-        return '{}#collapseInfra'.format(reverse('rolodex:project_detail', kwargs={'pk': self.object.project.pk}))
+            "Server history successfully deleted",
+            extra_tags="alert-warning",
+        )
+        return "{}#infrastructure".format(
+            reverse("rolodex:project_detail", kwargs={"pk": self.object.project.pk})
+        )
 
     def get_context_data(self, **kwargs):
-        """Override the `get_context_data()` function to provide additional
-        information.
-        """
         ctx = super(ServerHistoryDelete, self).get_context_data(**kwargs)
-        queryset = kwargs['object']
-        ctx['object_type'] = 'server checkout'
-        ctx['object_to_be_deleted'] = queryset
+        queryset = kwargs["object"]
+        ctx["object_type"] = "server checkout"
+        ctx["object_to_be_deleted"] = queryset
+        ctx["cancel_link"] = "{}#history".format(
+            reverse("rolodex:project_detail", kwargs={"pk": self.object.project.pk})
+        )
         return ctx
 
 
 class TransientServerCreate(LoginRequiredMixin, CreateView):
-    """View for creating new VPS entries. This view defaults to the
-    vps_form.html template.
     """
+    Create an individual :model:`shepherd.TransientServer`.
+
+    **Context**
+
+    ``project_name``
+        Codename from the related :model:`rolodex.Project`
+    ``cancel_link``
+        Link for the form's Cancel button to return to project's details page
+
+    **Template**
+
+    :template:`shepherd/vps_form.html`
+    """
+
     model = TransientServer
-    form_class = TransientServerCreateForm
-    template_name = 'shepherd/vps_form.html'
+    form_class = TransientServerForm
+    template_name = "shepherd/vps_form.html"
 
     def get_success_url(self):
-        """Override the function to show the project after server creation."""
         messages.success(
             self.request,
-            'Server successfully added to the project.',
-            extra_tags='alert-success')
-        return '{}#collapseInfra'.format(reverse('rolodex:project_detail', kwargs={'pk': self.object.project.pk}))
+            "Server successfully added to the project",
+            extra_tags="alert-success",
+        )
+        return "{}#infrastructure".format(
+            reverse("rolodex:project_detail", kwargs={"pk": self.object.project.pk})
+        )
 
     def get_initial(self):
-        """Set the initial values for the form."""
-        self.project_instance = get_object_or_404(
-            Project, pk=self.kwargs.get('pk'))
-        return {
-                'project': self.project_instance,
-                'operator': self.request.user
-               }
+        self.project_instance = get_object_or_404(Project, pk=self.kwargs.get("pk"))
+        return {"project": self.project_instance, "operator": self.request.user}
 
     def get_context_data(self, **kwargs):
-        """Override the `get_context_data()` function to provide additional
-        information.
-        """
         ctx = super(TransientServerCreate, self).get_context_data(**kwargs)
-        ctx['project_name'] = self.project_instance.codename
+        ctx["cancel_link"] = "{}#infrastructure".format(
+            reverse("rolodex:project_detail", kwargs={"pk": self.project_instance.id})
+        )
         return ctx
 
 
 class TransientServerUpdate(LoginRequiredMixin, UpdateView):
-    """View for updating existing VPS entries. This view defaults to the
-    vps_form.html template.
     """
+    Update an individual :model:`shepherd.TransientServer`.
+
+    **Context**
+
+    ``cancel_link``
+        Link for the form's Cancel button to return to project's details page
+
+    **Template**
+
+    :template:`shepherd/vps_form.html`
+    """
+
     model = TransientServer
-    form_class = TransientServerCreateForm
-    template_name = 'shepherd/vps_form.html'
+    form_class = TransientServerForm
+    template_name = "shepherd/vps_form.html"
 
     def get_success_url(self):
-        """Override the function to show the project after server updates."""
         messages.success(
             self.request,
-            'Server information successfully updated.',
-            extra_tags='alert-success')
-        return '{}#collapseInfra'.format(reverse('rolodex:project_detail', kwargs={'pk': self.object.project.pk}))
-
-
-class TransientServerDelete(LoginRequiredMixin, DeleteView):
-    """View for deleting existing VPS entries. This view defaults to the
-    confirm_delete.html template.
-    """
-    model = TransientServer
-    template_name = 'confirm_delete.html'
-
-    def get_success_url(self):
-        """Override the function to show the project after server deletion."""
-        messages.success(
-            self.request,
-            'Server successfully deleted.',
-            extra_tags='alert-warning')
-        return '{}#collapseInfra'.format(reverse('rolodex:project_detail', kwargs={'pk': self.object.project.pk}))
+            "Server information successfully updated",
+            extra_tags="alert-success",
+        )
+        return "{}#infrastructure".format(
+            reverse("rolodex:project_detail", kwargs={"pk": self.object.project.pk})
+        )
 
     def get_context_data(self, **kwargs):
-        """Override the `get_context_data()` function to provide additional
-        information.
-        """
-        ctx = super(TransientServerDelete, self).get_context_data(**kwargs)
-        queryset = kwargs['object']
-        ctx['object_type'] = 'virtual private server'
-        ctx['object_to_be_deleted'] = queryset.ip_address
+        ctx = super(TransientServerUpdate, self).get_context_data(**kwargs)
+        ctx["cancel_link"] = "{}#infrastructure".format(
+            reverse("rolodex:project_detail", kwargs={"pk": self.object.project.id})
+        )
         return ctx
 
 
 class DomainServerConnectionCreate(LoginRequiredMixin, CreateView):
-    """View for creating new DNS connections. This view defaults to the
-    connect_form.html template.
     """
+    Create an individual :model:`shepherd.DomainServerConnection`.
+
+    **Context**
+
+    ``cancel_link``
+        Link for the form's Cancel button to return to project's details page
+
+    **Template**
+
+    :template:`shepherd/connect_form.html`
+    """
+
     model = DomainServerConnection
     form_class = DomainLinkForm
-    template_name = 'shepherd/connect_form.html'
+    template_name = "shepherd/connect_form.html"
 
     def get_success_url(self):
-        """Override the function to show the project after server creation."""
         messages.success(
             self.request,
-            'Server successfully associated with domain.',
-            extra_tags='alert-success')
-        return '{}#collapseInfra'.format(reverse('rolodex:project_detail', kwargs={'pk': self.object.project.pk}))
+            "Server successfully associated with domain",
+            extra_tags="alert-success",
+        )
+        return "{}#infrastructure".format(
+            reverse("rolodex:project_detail", kwargs={"pk": self.object.project.pk})
+        )
 
     def get_form_kwargs(self, **kwargs):
-        """Set the kwarg for the form so querysets can be filtered."""
-        form_kwargs = super(
-            DomainServerConnectionCreate, self).get_form_kwargs(**kwargs)
-        form_kwargs['project'] = self.project_instance
+        form_kwargs = super(DomainServerConnectionCreate, self).get_form_kwargs(
+            **kwargs
+        )
+        form_kwargs["project"] = self.project_instance
         return form_kwargs
 
     def get_initial(self):
-        """Set the initial values for the form."""
-        self.project_instance = get_object_or_404(
-            Project, pk=self.kwargs.get('pk'))
-        return {
-                'project': self.project_instance
-               }
+        self.project_instance = get_object_or_404(Project, pk=self.kwargs.get("pk"))
+        return {"project": self.project_instance}
+
+    def get_context_data(self, **kwargs):
+        ctx = super(DomainServerConnectionCreate, self).get_context_data(**kwargs)
+        ctx["cancel_link"] = "{}#infrastructure".format(
+            reverse("rolodex:project_detail", kwargs={"pk": self.project_instance.id})
+        )
+        return ctx
 
 
 class DomainServerConnectionUpdate(LoginRequiredMixin, UpdateView):
-    """View for updating existing DNS connections. This view defaults to the
-    connect_form.html template.
     """
+    Update an individual :model:`shepherd.DomainServerConnection`.
+
+    **Context**
+
+    ``cancel_link``
+        Link for the form's Cancel button to return to project's details page
+
+    **Template**
+
+    :template:`shepherd/connect_form.html`
+    """
+
     model = DomainServerConnection
     form_class = DomainLinkForm
-    template_name = 'shepherd/connect_form.html'
+    template_name = "shepherd/connect_form.html"
 
     def get_success_url(self):
-        """Override the function to show the project after server updates."""
         messages.success(
             self.request,
-            'Connection information successfully updated.',
-            extra_tags='alert-success')
-        return '{}#collapseInfra'.format(reverse('rolodex:project_detail', kwargs={'pk': self.object.project.pk}))
+            "Connection information successfully updated",
+            extra_tags="alert-success",
+        )
+        return "{}#infrastructure".format(
+            reverse("rolodex:project_detail", kwargs={"pk": self.object.project.pk})
+        )
 
     def get_form_kwargs(self, **kwargs):
-        """Set the kwarg for the form so querysets can be filtered."""
-        form_kwargs = super(
-            DomainServerConnectionUpdate, self).get_form_kwargs(**kwargs)
-        form_kwargs['project'] = self.object.project
+        form_kwargs = super(DomainServerConnectionUpdate, self).get_form_kwargs(
+            **kwargs
+        )
+        form_kwargs["project"] = self.object.project
         return form_kwargs
 
-
-class DomainServerConnectionDelete(LoginRequiredMixin, DeleteView):
-    """View for deleting existing DNS connections. This view defaults to the
-    confirm_delete.html template.
-    """
-    model = DomainServerConnection
-    template_name = 'confirm_delete.html'
-
-    def get_success_url(self):
-        """Override the function to show the project after server deletion."""
-        messages.success(
-            self.request,
-            'Domain and server connection successfully deleted.',
-            extra_tags='alert-warning')
-        return '{}#collapseInfra'.format(reverse('rolodex:project_detail', kwargs={'pk': self.object.project.pk}))
-
     def get_context_data(self, **kwargs):
-        """Override the `get_context_data()` function to provide additional
-        information.
-        """
-        ctx = super(
-            DomainServerConnectionDelete, self).get_context_data(**kwargs)
-        queryset = kwargs['object']
-        ctx['object_type'] = 'domain + server association'
-        if queryset.static_server:
-            ctx['object_to_be_deleted'] = '{} « » {}'.format(
-                queryset.domain.domain.name,
-                queryset.static_server.server.ip_address)
-        elif queryset.transient_server:
-            ctx['object_to_be_deleted'] = '{} « » {}'.format(
-                queryset.domain.domain.name,
-                queryset.transient_server.ip_address)
-        else:
-            ctx['object_to_be_deleted'] = 'The Impossible Has Happened'
+        ctx = super(DomainServerConnectionUpdate, self).get_context_data(**kwargs)
+        ctx["cancel_link"] = "{}#infrastructure".format(
+            reverse("rolodex:project_detail", kwargs={"pk": self.object.project.id})
+        )
         return ctx
 
 
 class DomainNoteCreate(LoginRequiredMixin, CreateView):
-    """View for creating new note entries. This view defaults to the
-    domain_note_form.html template.
     """
+    Create an individual :model:`shepherd.DomainNote`.
+
+    **Context**
+
+    ``domain_name``
+        Domain name value from the related :model:`shepherd.Domain`
+    ``cancel_link``
+        Link for the form's Cancel button to return to server's detail page
+
+    **Template**
+
+    :template:`note_form.html`
+    """
+
     model = DomainNote
-    form_class = DomainNoteCreateForm
-    template_name = 'note_form.html'
+    form_class = DomainNoteForm
+    template_name = "note_form.html"
 
     def get_success_url(self):
-        """Override the function to return to the new record after creation."""
         messages.success(
             self.request,
-            'Note successfully added to this domain.',
-            extra_tags='alert-success')
-        return '{}#collapseNotes'.format(reverse('shepherd:domain_detail', kwargs={'pk': self.object.domain.id}))
+            "Note successfully added to this domain",
+            extra_tags="alert-success",
+        )
+        return "{}#notes".format(
+            reverse("shepherd:domain_detail", kwargs={"pk": self.object.domain.id})
+        )
 
     def get_initial(self):
-        """Set the initial values for the form."""
-        domain_instance = get_object_or_404(Domain, pk=self.kwargs.get('pk'))
-        domain = domain_instance
-        return {
-                'domain': domain,
-                'operator': self.request.user
-               }
+        self.domain_instance = get_object_or_404(Domain, pk=self.kwargs.get("pk"))
+        return {"domain": self.domain_instance, "operator": self.request.user}
 
     def get_context_data(self, **kwargs):
-        """Override the `get_context_data()` function to provide additional
-        information.
-        """
         ctx = super(DomainNoteCreate, self).get_context_data(**kwargs)
-        domain_instance = get_object_or_404(Domain, pk=self.kwargs.get('pk'))
-        ctx['domain_name'] = domain_instance.name.upper()
+        ctx["note_object"] = self.domain_instance.name.upper()
+        ctx["cancel_link"] = "{}#notes".format(
+            reverse("shepherd:domain_detail", kwargs={"pk": self.domain_instance.id})
+        )
         return ctx
+
+    def form_valid(self, form, **kwargs):
+        self.object = form.save(commit=False)
+        self.object.operator = self.request.user
+        self.object.domain_id = self.kwargs.get("pk")
+        self.object.save()
+        return super().form_valid(form)
 
 
 class DomainNoteUpdate(LoginRequiredMixin, UpdateView):
-    """View for updating existing note entries. This view defaults to the
-    domain_note_form.html template.
     """
+    Update an individual :model:`shepherd.DomainNote`.
+
+    **Context**
+
+    ``cancel_link``
+        Link for the form's Cancel button to return to server's detail page
+
+    **Template**
+
+    :template:`note_form.html`
+    """
+
     model = DomainNote
-    form_class = DomainNoteCreateForm
-    template_name = 'note_form.html'
+    form_class = DomainNoteForm
+    template_name = "note_form.html"
 
     def get_success_url(self):
-        """Override the function to return to the new record after updating."""
         messages.success(
-            self.request,
-            'Note successfully updated.',
-            extra_tags='alert-success')
-        return '{}#collapseNotes'.format(reverse('shepherd:domain_detail', kwargs={'pk': self.object.domain.id}))
-
-
-class DomainNoteDelete(LoginRequiredMixin, DeleteView):
-    """View for deleting existing note entries. This view defaults to the
-    confirm_delete.html template.
-    """
-    model = DomainNote
-    template_name = 'confirm_delete.html'
-
-    def get_success_url(self):
-        """Override the function to return to the domain after deletion."""
-        messages.warning(
-            self.request,
-            'Note successfully deleted.',
-            extra_tags='alert-warning')
-        return '{}#collapseNotes'.format(reverse('shepherd:domain_detail', kwargs={'pk': self.object.domain.id}))
+            self.request, "Note successfully updated", extra_tags="alert-success"
+        )
+        return "{}#notes".format(
+            reverse("shepherd:domain_detail", kwargs={"pk": self.object.domain.id})
+        )
 
     def get_context_data(self, **kwargs):
-        """Override the `get_context_data()` function to provide additional
-        information.
-        """
-        ctx = super(DomainNoteDelete, self).get_context_data(**kwargs)
-        queryset = kwargs['object']
-        ctx['object_type'] = 'note'
-        ctx['object_to_be_deleted'] = queryset.note
+        ctx = super(DomainNoteUpdate, self).get_context_data(**kwargs)
+        ctx["note_object"] = self.object.domain.name.upper()
+        ctx["cancel_link"] = "{}#notes".format(
+            reverse("shepherd:domain_detail", kwargs={"pk": self.object.domain.id})
+        )
         return ctx
 
 
 class ServerNoteCreate(LoginRequiredMixin, CreateView):
-    """View for creating new note entries. This view defaults to the
-    note_form.html template.
     """
+    Create an individual :model:`shepherd.ServerNote`.
+
+    **Context**
+
+    ``note_object``
+        Instance of :model:`rolodex.Project` associated with note
+    ``cancel_link``
+        Link for the form's Cancel button to return to server's detail page
+
+    **Template**
+
+    :template:`note_form.html`
+    """
+
     model = ServerNote
-    form_class = ServerNoteCreateForm
-    template_name = 'note_form.html'
+    form_class = ServerNoteForm
+    template_name = "note_form.html"
 
     def get_success_url(self):
-        """Override the function to return to the new record after creation."""
         messages.success(
             self.request,
-            'Note successfully added to this server.',
-            extra_tags='alert-success')
-        return '{}#collapseNotes'.format(reverse('shepherd:server_detail', kwargs={'pk': self.object.server.id}))
+            "Note successfully added to this server",
+            extra_tags="alert-success",
+        )
+        return "{}#notes".format(
+            reverse("shepherd:server_detail", kwargs={"pk": self.object.server.id})
+        )
 
     def get_initial(self):
-        """Set the initial values for the form."""
-        server_instance = get_object_or_404(
-            StaticServer, pk=self.kwargs.get('pk'))
-        server = server_instance
-        return {
-                'server': server,
-                'operator': self.request.user
-               }
+        self.server_instance = get_object_or_404(StaticServer, pk=self.kwargs.get("pk"))
+        return {"server": self.server_instance, "operator": self.request.user}
 
     def get_context_data(self, **kwargs):
-        """Override the `get_context_data()` function to provide additional
-        information.
-        """
         ctx = super(ServerNoteCreate, self).get_context_data(**kwargs)
-        server_instance = get_object_or_404(
-            StaticServer, pk=self.kwargs.get('pk'))
-        ctx['server_name'] = server_instance.ip_address
+        ctx["note_object"] = self.server_instance.ip_address
+        ctx["cancel_link"] = reverse(
+            "shepherd:server_detail", kwargs={"pk": self.server_instance.id}
+        )
         return ctx
+
+    def form_valid(self, form, **kwargs):
+        self.object = form.save(commit=False)
+        self.object.operator = self.request.user
+        self.object.server_id = self.kwargs.get("pk")
+        self.object.save()
+        return super().form_valid(form)
 
 
 class ServerNoteUpdate(LoginRequiredMixin, UpdateView):
-    """View for updating existing note entries. This view defaults to the
-    note_form.html template.
     """
+    Update an individual :model:`shepherd.ServerNote`.
+
+    **Context**
+
+    ``note_object``
+        Instance of :model:`rolodex.Project` associated with note
+    ``cancel_link``
+        Link for the form's Cancel button to return to server's detail page
+
+    **Template**
+
+    :template:`note_form.html`
+    """
+
     model = ServerNote
-    form_class = ServerNoteCreateForm
-    template_name = 'note_form.html'
+    form_class = ServerNoteForm
+    template_name = "note_form.html"
 
     def get_success_url(self):
-        """Override the function to return to the new record after updating."""
         messages.success(
-            self.request,
-            'Note successfully updated.',
-            extra_tags='alert-success')
-        return '{}#collapseNotes'.format(reverse('shepherd:server_detail', kwargs={'pk': self.object.server.id}))
-
-
-class ServerNoteDelete(LoginRequiredMixin, DeleteView):
-    """View for deleting existing note entries. This view defaults to the
-    confirm_delete.html template.
-    """
-    model = ServerNote
-    template_name = 'confirm_delete.html'
-
-    def get_success_url(self):
-        """Override the function to return to the server after deletion."""
-        messages.warning(
-            self.request,
-            'Note successfully deleted.',
-            extra_tags='alert-warning')
-        return '{}#collapseNotes'.format(reverse('shepherd:server_detail', kwargs={'pk': self.object.server.id}))
+            self.request, "Note successfully updated", extra_tags="alert-success"
+        )
+        return "{}#notes".format(
+            reverse("shepherd:server_detail", kwargs={"pk": self.object.server.id})
+        )
 
     def get_context_data(self, **kwargs):
-        """Override the `get_context_data()` function to provide additional
-        information.
-        """
-        ctx = super(ServerNoteDelete, self).get_context_data(**kwargs)
-        queryset = kwargs['object']
-        ctx['object_type'] = 'note'
-        ctx['object_to_be_deleted'] = queryset.note
-        return ctx
-
-
-class AuxServerAddressCreate(LoginRequiredMixin, CreateView):
-    """View for creating new auxiliary addresses for a server. This view
-    defaults to the address_form.html template.
-    """
-    model = AuxServerAddress
-    form_class = AuxServerAddressCreateForm
-    template_name = 'shepherd/address_form.html'
-
-    def get_success_url(self):
-        """Override the function to return to the new record after creation."""
-        messages.success(
-            self.request,
-            'Auxiliary address successfully added to this server.',
-            extra_tags='alert-success')
-        return reverse('shepherd:server_detail', kwargs={'pk': self.object.static_server.id})
-
-    def get_initial(self):
-        """Set the initial values for the form."""
-        server_instance = get_object_or_404(
-            StaticServer, pk=self.kwargs.get('pk'))
-        server = server_instance
-        return {
-                'static_server': server
-               }
-
-    def get_context_data(self, **kwargs):
-        """Override the `get_context_data()` function to provide additional
-        information.
-        """
-        ctx = super(AuxServerAddressCreate, self).get_context_data(**kwargs)
-        server_instance = get_object_or_404(
-            StaticServer, pk=self.kwargs.get('pk'))
-        ctx['server_id'] = server_instance.id
-        ctx['server_name'] = server_instance.ip_address
-        return ctx
-
-    def form_valid(self, form):
-        """Override form_valid to perform additional actions on new entries."""
-        if form.cleaned_data['primary']:
-            aux_addresses = AuxServerAddress.objects.filter(static_server=form.cleaned_data['static_server'])
-            for address in aux_addresses:
-                if address.primary:
-                    address.primary = False
-                    address.save()
-        self.object = form.save()
-        return HttpResponseRedirect(self.get_success_url())
-
-
-class AuxServerAddressUpdate(LoginRequiredMixin, UpdateView):
-    """View for updating existing auxiliary addresses. This view defaults to the
-    address_form.html template.
-    """
-    model = AuxServerAddress
-    form_class = AuxServerAddressCreateForm
-    template_name = 'shepherd/address_form.html'
-
-    def get_success_url(self):
-        """Override the function to return to the new record after updating."""
-        messages.success(
-            self.request,
-            'Auxiliary address successfully updated.',
-            extra_tags='alert-success')
-        return reverse('shepherd:server_detail', kwargs={'pk': self.object.static_server.pk})
-
-    def get_context_data(self, **kwargs):
-        """Override the `get_context_data()` function to provide additional
-        information.
-        """
-        ctx = super(AuxServerAddressUpdate, self).get_context_data(**kwargs)
-        server_instance = get_object_or_404(
-            StaticServer, pk=self.kwargs.get('pk'))
-        ctx['server_id'] = server_instance.id
-        return ctx
-
-    def form_valid(self, form):
-        """Override form_valid to perform additional actions on updated entries."""
-        if form.cleaned_data['primary']:
-            aux_addresses = AuxServerAddress.objects.filter(static_server=form.cleaned_data['static_server'])
-            for address in aux_addresses:
-                if address.primary:
-                    address.primary = False
-                    address.save()
-        self.object = form.save()
-        return HttpResponseRedirect(self.get_success_url())
-
-
-class AuxServerAddressDelete(LoginRequiredMixin, DeleteView):
-    """View for deleting existing auxiliary addresses. This view defaults to the
-    confirm_delete.html template.
-    """
-    model = AuxServerAddress
-    template_name = 'confirm_delete.html'
-
-    def get_success_url(self):
-        """Override the function to return to the server after deletion."""
-        messages.warning(
-            self.request,
-            'Auxiliary address successfully deleted.',
-            extra_tags='alert-warning')
-        return reverse('shepherd:server_detail', kwargs={'pk': self.object.static_server.pk})
-
-    def get_context_data(self, **kwargs):
-        """Override the `get_context_data()` function to provide additional
-        information.
-        """
-        ctx = super(AuxServerAddressDelete, self).get_context_data(**kwargs)
-        queryset = kwargs['object']
-        ctx['object_type'] = 'auxiliary address'
-        ctx['object_to_be_deleted'] = queryset.ip_address
+        ctx = super(ServerNoteUpdate, self).get_context_data(**kwargs)
+        server_instance = self.object.server
+        ctx["note_object"] = server_instance.ip_address
+        ctx["cancel_link"] = reverse(
+            "shepherd:server_detail", kwargs={"pk": self.object.server.id}
+        )
         return ctx

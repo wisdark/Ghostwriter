@@ -2,8 +2,10 @@
 Base settings to build other settings files upon.
 """
 
+# Django & Other 3rd Party Libraries
 import environ
-import os
+from django.contrib.messages import constants as messages
+
 
 ROOT_DIR = (
     environ.Path(__file__) - 3
@@ -21,10 +23,11 @@ if READ_DOT_ENV_FILE:
 # ------------------------------------------------------------------------------
 # https://docs.djangoproject.com/en/dev/ref/settings/#debug
 DEBUG = env.bool("DJANGO_DEBUG", False)
-# Local time zone. Choices are
-# http://en.wikipedia.org/wiki/List_of_tz_zones_by_name
-# though not all of them may be available with every OS.
-# In Windows, this must be set to your system time zone.
+
+# Local time zone – Choices are:
+#   http://en.wikipedia.org/wiki/List_of_tz_zones_by_name
+#   Not all of them may be available with every OS
+#   In Windows, this must be set to your system time zone
 TIME_ZONE = "UTC"
 # https://docs.djangoproject.com/en/dev/ref/settings/#language-code
 LANGUAGE_CODE = "en-us"
@@ -49,8 +52,10 @@ DATABASES["default"]["ATOMIC_REQUESTS"] = True
 # ------------------------------------------------------------------------------
 # https://docs.djangoproject.com/en/dev/ref/settings/#root-urlconf
 ROOT_URLCONF = "config.urls"
+
 # https://docs.djangoproject.com/en/dev/ref/settings/#wsgi-application
-WSGI_APPLICATION = "config.wsgi.application"
+# WSGI_APPLICATION = "config.wsgi.application"
+ASGI_APPLICATION = "config.routing.application"
 
 # APPS
 # ------------------------------------------------------------------------------
@@ -63,6 +68,8 @@ DJANGO_APPS = [
     "django.contrib.staticfiles",
     # "django.contrib.humanize", # Handy template tags
     "django.contrib.admin",
+    "channels",
+    "django.contrib.admindocs",
 ]
 
 THIRD_PARTY_APPS = [
@@ -70,22 +77,41 @@ THIRD_PARTY_APPS = [
     "allauth",
     "allauth.account",
     "allauth.socialaccount",
-    # "rest_framework",
-    'django_q',
-    'django_filters',
-    'import_export',
-    'tinymce',
+    "rest_framework",
+    "rest_framework_api_key",
+    "django_q",
+    "django_filters",
+    "import_export",
+    "tinymce",
+    "django_bleach",
 ]
 
 LOCAL_APPS = [
     "ghostwriter.users.apps.UsersConfig",
     "ghostwriter.home.apps.HomeConfig",
-    'ghostwriter.rolodex.apps.RolodexConfig',
-    'ghostwriter.shepherd.apps.ShepherdConfig',
-    'ghostwriter.reporting.apps.ReportingConfig',
+    "ghostwriter.rolodex.apps.RolodexConfig",
+    "ghostwriter.shepherd.apps.ShepherdConfig",
+    "ghostwriter.reporting.apps.ReportingConfig",
+    "ghostwriter.oplog.apps.OplogConfig",
+    "ghostwriter.commandcenter.apps.CommandCenterConfig",
+    "ghostwriter.singleton.apps.SingletonConfig",
 ]
 # https://docs.djangoproject.com/en/dev/ref/settings/#installed-apps
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
+
+# WEBSOCKETS
+# ------------------------------------------------------------------------------
+# https://channels.readthedocs.io/en/stable/installation.html
+ASGI_APPLICATION = "ghostwriter.routing.application"
+
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [("redis", 6379)],
+        },
+    },
+}
 
 # MIGRATIONS
 # ------------------------------------------------------------------------------
@@ -216,14 +242,14 @@ X_FRAME_OPTIONS = "SAMEORIGIN"
 EMAIL_BACKEND = env(
     "DJANGO_EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend"
 )
-### EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+# EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 
 # https://docs.djangoproject.com/en/2.2/ref/settings/#email-timeout
 EMAIL_TIMEOUT = 5
 
 # ADMIN
 # ------------------------------------------------------------------------------
-# Django Admin URL.
+# Django Admin URL
 ADMIN_URL = "admin/"
 # https://docs.djangoproject.com/en/dev/ref/settings/#admins
 ADMINS = []
@@ -240,8 +266,7 @@ LOGGING = {
     "disable_existing_loggers": False,
     "formatters": {
         "verbose": {
-            "format": "%(levelname)s %(asctime)s %(module)s "
-            "%(process)d %(thread)d %(message)s"
+            "format": "%(levelname)s %(asctime)s %(module)s %(process)d %(thread)d %(message)s"
         }
     },
     "handlers": {
@@ -253,7 +278,6 @@ LOGGING = {
     },
     "root": {"level": "INFO", "handlers": ["console"]},
 }
-
 
 # django-allauth
 # ------------------------------------------------------------------------------
@@ -268,7 +292,7 @@ ACCOUNT_EMAIL_VERIFICATION = env.bool("DJANGO_ACCOUNT_EMAIL_VERIFICATION", "mand
 ACCOUNT_ADAPTER = "ghostwriter.users.adapters.AccountAdapter"
 # https://django-allauth.readthedocs.io/en/latest/configuration.html
 SOCIALACCOUNT_ADAPTER = "ghostwriter.users.adapters.SocialAccountAdapter"
-ACCOUNT_SIGNUP_FORM_CLASS = 'ghostwriter.home.forms.SignupForm'
+ACCOUNT_SIGNUP_FORM_CLASS = "ghostwriter.home.forms.SignupForm"
 
 # django-compressor
 # ------------------------------------------------------------------------------
@@ -276,17 +300,17 @@ ACCOUNT_SIGNUP_FORM_CLASS = 'ghostwriter.home.forms.SignupForm'
 INSTALLED_APPS += ["compressor"]
 STATICFILES_FINDERS += ["compressor.finders.CompressorFinder"]
 
-# Message formatting
-
-from django.contrib.messages import constants as messages
+# DJANGO MESSAGES
+# ------------------------------------------------------------------------------
 MESSAGE_TAGS = {
-    messages.INFO: 'alert alert-info',
-    messages.SUCCESS: 'alert alert-success',
-    messages.WARNING: 'alert alert-warning',
-    messages.ERROR: 'alert alert-danger'
+    messages.INFO: "alert alert-info",
+    messages.SUCCESS: "alert alert-success",
+    messages.WARNING: "alert alert-warning",
+    messages.ERROR: "alert alert-danger",
 }
 
-# Django Q settings
+# DJANGO Q
+# ------------------------------------------------------------------------------
 
 # Settings to be aware of:
 
@@ -299,58 +323,92 @@ MESSAGE_TAGS = {
 # health checks can take a long time and will be different for everyone.
 
 Q_CLUSTER = {
-    'name': env("QCLUSTER_NAME", default="soar"),
-    'recycle': 500,
-    'save_limit': 35,
-    'queue_limit': 500,
-    'cpu_affinity': 1,
-    'label': 'Django Q',
-    'redis': env("QCLUSTER_CONNECTION", default={'host': 'redis', 'port': 6379, 'db': 0})
+    "name": env("QCLUSTER_NAME", default="soar"),
+    "recycle": 500,
+    "save_limit": 35,
+    "queue_limit": 500,
+    "cpu_affinity": 1,
+    "label": "Django Q",
+    "redis": env(
+        "QCLUSTER_CONNECTION", default={"host": "redis", "port": 6379, "db": 0}
+    ),
 }
 
-# DomainCheck configuration
-# Enter a VirusTotal API key (free or paid)
-DOMAINCHECK_CONFIG = {
-    'virustotal_api_key': env("VIRUSTOTAL_API_KEY", default=None),
-    'sleep_time': 20,
+# SETTINGS
+# ------------------------------------------------------------------------------
+# All settings are stored in singleton models in the CommandCenter app
+# Settings can be cached to avoid repeated database queries
+
+# The cache that should be used, e.g. 'default'
+# Set to ``None`` to disable caching
+# Ghostwriter does not use a cache by default
+SOLO_CACHE = None
+SOLO_CACHE_TIMEOUT = 60 * 5
+SOLO_CACHE_PREFIX = "solo"
+
+# Default location for report templates
+TEMPLATE_LOC = env("TEMPLATE_LOC", default=str(APPS_DIR("media", "templates")))
+
+# BLEACH
+# ------------------------------------------------------------------------------
+# Which HTML tags are allowed
+BLEACH_ALLOWED_TAGS = [
+    "code",
+    "span",
+    "p",
+    "ul",
+    "ol",
+    "li",
+    "a",
+    "em",
+    "strong",
+    "u",
+    "b",
+    "i",
+    "pre",
+    "sub",
+    "sup",
+    "del",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+]
+# Which HTML attributes are allowed
+BLEACH_ALLOWED_ATTRIBUTES = ["href", "title", "style", "class", "src"]
+# Which CSS properties are allowed in 'style' attributes (assuming style is an allowed attribute)
+BLEACH_ALLOWED_STYLES = [
+    "color",
+    "font-family",
+    "font-weight",
+    "text-decoration",
+    "font-variant",
+]
+# Which protocols (and pseudo-protocols) are allowed in 'src' attributes (assuming src is an allowed attribute)
+BLEACH_ALLOWED_PROTOCOLS = ["http", "https", "data"]
+# Strip unknown tags if True, replace with HTML escaped characters if False
+BLEACH_STRIP_TAGS = True
+# Strip HTML comments, or leave them in.
+BLEACH_STRIP_COMMENTS = True
+
+# Django REST Configuration
+# ------------------------------------------------------------------------------
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        # 'rest_framework.authentication.TokenAuthentication',
+        "rest_framework.authentication.SessionAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
+        # 'rest_framework_api_key.permissions.HasAPIKey',
+    ],
 }
 
-# Slack configuration
-SLACK_CONFIG = {
-    'enable_slack': env("SLACK_ENABLE", default=False),
-    'slack_emoji': env("SLACK_EMOJI", default=":ghost:"),
-    'slack_channel': env("SLACK_CHANNEL", default="#ghostwriter"),
-    'slack_alert_target': env("SLACK_ALERT_TARGET", default="<@ghostwriter>"),
-    'slack_username': env("SLACK_USERNAME", default="Ghostwriter"),
-    'slack_webhook_url': env("SLACK_URL", default="")
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {"hosts": [("redis", "6379")]},
+    }
 }
-
-# Global settings for your team
-COMPANY_NAME = env("COMPANY_NAME", default="Ghostwriter")
-COMPANY_TWITTER = env("COMPANY_TWITTER", default="@ghostwriter")
-COMPANY_EMAIL = env("COMPANY_EMAIL", default="info@ghostwriter.local")
-
-TEMPLATE_LOC = env("TEMPLATE_LOC", default=str(APPS_DIR("reporting", "templates", "reports")))
-
-# Namecheap configuration
-NAMECHEAP_CONFIG = {
-    'enable_namecheap': env("NAMECHEAP_ENABLE", default=False),
-    'namecheap_api_key': env("NAMECHEAP_API_KEY", default=None),
-    'namecheap_username': env("NAMECHEAP_USERNAME", default=None),
-    'namecheap_api_username': env("NAMECHEAP_API_USERNAME", default=None),
-    'client_ip': env("CLIENT_IP", default=None),
-    'namecheap_page_size': env("NAMECHEAP_PAGE_SIZE", default="100")
-}
-
-# Cloud service configuration
-CLOUD_SERVICE_CONFIG = {
-    'enable_cloud_monitor': env("ENABLE_CLOUD_MONITOR", default=False),
-    'aws_key': env("AWS_KEY", default=None),
-    'aws_secret': env("AWS_SECRET", default=None),
-    'do_api_key': env("DO_API_KEY", default=None)
-}
-
-TINYMCE_JS_ROOT = os.path.join(STATIC_ROOT, "js/tiny_mce")
-TINYMCE_JS_URL = os.path.join(STATIC_URL, "js/tiny_mce/tiny_mce.min.js")
-TINYMCE_SPELLCHECKER = True
-TINYMCE_COMPRESSOR = True

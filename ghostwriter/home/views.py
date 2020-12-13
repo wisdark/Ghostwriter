@@ -1,44 +1,33 @@
-"""This contains all of the views for the Home application's various
-webpages.
-"""
+"""This contains all of the views used by the Home application."""
 
-import logging
+# Standard Libraries
 import datetime
+import logging
 
-# Django imports for generic views and template rendering
-from django.urls import reverse
+# Django & Other 3rd Party Libraries
+from django.conf import settings
 from django.contrib import messages
-from django.shortcuts import render, redirect, get_object_or_404
-from django.contrib.admin.views.decorators import staff_member_required
-
-# Django imports for verifying a user is logged-in to access a view
+from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
-
-# Django imports for forms
-from django.http import HttpResponseRedirect
-
-# Django Q imports for task management
+from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+from django.db.models import Q
+from django.http import JsonResponse
+from django.shortcuts import redirect, render
+from django.urls import reverse
+from django.views.static import serve
+from django.views.generic.edit import View
+from django_q.models import Task
 from django_q.tasks import async_task
 
-# Django imports for updating passwords
-from django.contrib.auth import update_session_auth_hash, get_user_model
-from django.contrib.auth.forms import PasswordChangeForm
-
-# Import for references to Django's settings.py
-from django.conf import settings
-
-# Import additional models
-from django.db.models import Q
-from django_q.models import Task
-from .models import UserProfile
-from .forms import UserProfileForm
-# from django.contrib.auth.models import User
-from ghostwriter.rolodex.models import ProjectAssignment
+# Ghostwriter Libraries
 from ghostwriter.reporting.models import ReportFindingLink
+from ghostwriter.rolodex.models import ProjectAssignment
+
+from .forms import UserProfileForm
 
 User = get_user_model()
 
-# Setup logger
+# Using __name__ resolves to ghostwriter.home.views
 logger = logging.getLogger(__name__)
 
 
@@ -46,134 +35,310 @@ logger = logging.getLogger(__name__)
 # View Functions #
 ##################
 
+
+@login_required
+def protected_serve(request, path, document_root=None, show_indexes=False):
+    """
+    Serve static files from ``MEDIA_ROOT`` for authenticated requests.
+    """
+    return serve(request, path, document_root, show_indexes)
+
+
 @login_required
 def dashboard(request):
-    """View function for the home page, index.html."""
-    # from ghostwriter.rolodex.models import ProjectAssignment
-    # from ghostwriter.reporting.models import ReportFindingLink
+    """
+    Display the home page.
+
+    **Context**
+
+    ``user_projects``
+        Active :model:`reporting.ProjectAssignment` for current :model:`users.User`
+    ``upcoming_projects``
+        Future :model:`reporting.ProjectAssignment` for current :model:`users.User`
+    ``recent_tasks``
+        Five most recent :model:`django_q.Task` entries
+    ``user_tasks``
+        Incomplete :model:`reporting.ReportFindingLink` for current :model:`users.User`
+
+    **Template**
+
+    :template:`index.html`
+    """
+    # Get the most recent :model:`django_q.Task` entries
     recent_tasks = Task.objects.all()[:5]
-    user_tasks = ReportFindingLink.objects.\
-        select_related('report', 'report__project').\
-        filter(Q(assigned_to=request.user) & Q(report__complete=False) &
-              Q(complete=False)).order_by('report__project__end_date')[:10]
-    user_projects = ProjectAssignment.objects.\
-        select_related('project', 'project__client', 'role').\
-        filter(Q(operator=request.user) &
-              Q(start_date__lte=datetime.datetime.now()) &
-              Q(end_date__gte=datetime.datetime.now()))
-    upcoming_project = ProjectAssignment.objects.\
-        select_related('project', 'project__client', 'role').\
-        filter(Q(operator=request.user) &
-              Q(start_date__gt=datetime.datetime.now()))
-    # Assemble the context dictionary to pas to the dashboard
+    # Get incomplete :model:`reporting.ReportFindingLink` for current :model:`users.User`
+    user_tasks = (
+        ReportFindingLink.objects.select_related("report", "report__project")
+        .filter(
+            Q(assigned_to=request.user) & Q(report__complete=False) & Q(complete=False)
+        )
+        .order_by("report__project__end_date")[:10]
+    )
+    # Get active :model:`reporting.ProjectAssignment` for current :model:`users.User`
+    user_projects = ProjectAssignment.objects.select_related(
+        "project", "project__client", "role"
+    ).filter(
+        Q(operator=request.user)
+        & Q(start_date__lte=datetime.datetime.now())
+        & Q(end_date__gte=datetime.datetime.now())
+    )
+    # Get future :model:`reporting.ProjectAssignment` for current :model:`users.User`
+    upcoming_project = ProjectAssignment.objects.select_related(
+        "project", "project__client", "role"
+    ).filter(Q(operator=request.user) & Q(start_date__gt=datetime.datetime.now()))
+    # Assemble the context dictionary to pass to the dashboard
     context = {
-        'user_projects': user_projects,
-        'upcoming_project': upcoming_project,
-        'recent_tasks': recent_tasks,
-        'user_tasks': user_tasks
+        "user_projects": user_projects,
+        "upcoming_project": upcoming_project,
+        "recent_tasks": recent_tasks,
+        "user_tasks": user_tasks,
     }
     # Render the HTML template index.html with the data in the context variable
-    return render(request, 'index.html', context=context)
+    return render(request, "index.html", context=context)
 
 
 @login_required
 def profile(request):
-    """View function for the user profile, profile.html."""
-    # Get the current user's user object
-    # user = request.user
-    # # Look-up the username in the database
-    # current_user_name = User.objects.get(username=user.username)
-    # current_user_avatar = UserProfile.objects.get(user=user.id)
-    # If ths is a POST, process it as a password update
-    if request.method == 'POST':
-        form = PasswordChangeForm(request.user, request.POST)
-        if form.is_valid():
-            user = form.save()
-            # This is a VERY important step!
-            update_session_auth_hash(request, user)
-            messages.success(request,
-                             'Your password was successfully updated!',
-                             extra_tags='alert-success')
-            return redirect('profile')
-    else:
-        form = PasswordChangeForm(request.user)
-    return render(request, 'home/profile.html', {
-        'form': form,
-        # 'current_user': current_user_name,
-        # 'user_avatar': current_user_avatar
-    })
+    """
+    Display an individual :model:`home.UserProfile`.
+
+    **Template**
+
+    :template:`home/profile.html`
+    """
+    return render(request, "home/profile.html")
 
 
 @login_required
 def upload_avatar(request):
-    """View function to modify the user profile avatar with
-    upload_avatar.html.
     """
-    if request.method == 'POST':
-        form = UserProfileForm(request.POST,
-                               request.FILES,
-                               instance=request.user.userprofile)
+    Upload an avatar image for an individual :model:`home.UserProfile`.
+
+    **Context**
+
+    ``form``
+        A single ``UserProfileForm`` form.
+    ``cancel_link``
+        Link for the form's Cancel button to return to user's profile page
+
+    **Template**
+
+    :template:`hom/upload_avatar.html`
+    """
+
+    if request.method == "POST":
+        form = UserProfileForm(
+            request.POST, request.FILES, instance=request.user.userprofile
+        )
         if form.is_valid():
             form.save()
-            return redirect('home:profile')
+            return redirect("home:profile")
     else:
         form = UserProfileForm()
-    return render(request, 'home/upload_avatar.html', {'form': form})
+    cancel_link = reverse("home:profile")
+    return render(
+        request, "home/upload_avatar.html", {"form": form, "cancel_link": cancel_link}
+    )
 
 
-@login_required
-@staff_member_required
-def management(request):
-    """View function to display the current settings configured for
-    Ghostwriter.
+class Management(LoginRequiredMixin, UserPassesTestMixin, View):
     """
-    # Get the *_CONFIG dictionaries from settings.py
-    config = {}
-    config.update(settings.SLACK_CONFIG)
-    config.update(settings.NAMECHEAP_CONFIG)
-    config.update(settings.DOMAINCHECK_CONFIG)
-    # Pass the relevant settings to management.html
-    context = {
-        'timezone': settings.TIME_ZONE,
-        'sleep_time': config['sleep_time'],
-        'slack_emoji': config['slack_emoji'],
-        'enable_slack': config['enable_slack'],
-        'slack_channel': config['slack_channel'],
-        'slack_username': config['slack_username'],
-        'slack_webhook_url': config['slack_webhook_url'],
-        'virustotal_api_key': config['virustotal_api_key'],
-        'slack_alert_target': config['slack_alert_target'],
-        'namecheap_client_ip': config['client_ip'],
-        'enable_namecheap': config['enable_namecheap'],
-        'namecheap_api_key': config['namecheap_api_key'],
-        'namecheap_username': config['namecheap_username'],
-        'namecheap_page_size': config['namecheap_page_size'],
-        'namecheap_api_username': config['namecheap_api_username']
-    }
-    return render(request, 'home/management.html', context=context)
+    Display the current Ghostwriter settings.
 
+    **Context**
 
-@login_required
-@staff_member_required
-def send_slack_test_msg(request):
-    """View function to schedule a background task to send a test Slack
-    message.
+    ``timezone``
+        The current value of ``settings.TIME_ZONE``
+
+    **Template**
+
+    :template:`home/management.html`
     """
-    # Check if the request is a POST and proceed with the task
-    if request.method == 'POST':
-        # Add an async task grouped as `Test Slack Message`
+
+    def test_func(self):
+        return self.request.user.is_staff
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that")
+        return redirect("home:dashboard")
+
+    def get(self, request, *args, **kwargs):
+        context = {
+            "timezone": settings.TIME_ZONE,
+        }
+        return render(request, "home/management.html", context=context)
+
+
+class TestAWSConnection(LoginRequiredMixin, UserPassesTestMixin, View):
+    """
+    Create an individual :model:`django_q.Task` under group ``AWS Test`` with
+    :task:`shepherd.tasks.test_aws_keys` to test AWS keys in
+    :model:`commandcenter.CloudServicesConfiguration`.
+    """
+
+    def test_func(self):
+        return self.request.user.is_staff
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that")
+        return redirect("home:dashboard")
+
+    def post(self, request, *args, **kwargs):
+        # Add an async task grouped as ``AWS Test``
+        result = "success"
         try:
             task_id = async_task(
-                'ghostwriter.shepherd.tasks.send_slack_test_msg',
-                group='Test Slack Message')
-            messages.success(
-                request,
-                'Test Slack message has been successfully queued.',
-                extra_tags='alert-success')
+                "ghostwriter.shepherd.tasks.test_aws_keys",
+                self.request.user,
+                group="AWS Test",
+            )
+            message = "AWS access key test has been successfully queued"
         except Exception:
-            messages.error(
-                request,
-                'Test Slack message task could not be queued. '
-                'Is the AMQP server running?',
-                extra_tags='alert-danger')
-    return HttpResponseRedirect(reverse('home:management'))
+            result = "error"
+            message = "AWS access key test could not be queued"
+
+        data = {
+            "result": result,
+            "message": message,
+        }
+        return JsonResponse(data)
+
+
+class TestDOConnection(LoginRequiredMixin, UserPassesTestMixin, View):
+    """
+    Create an individual :model:`django_q.Task` under group ``Digital Ocean Test`` with
+    :task:`shepherd.tasks.test_digital_ocean` to test the Digital Ocean API key stored in
+    :model:`commandcenter.CloudServicesConfiguration`.
+    """
+
+    def test_func(self):
+        return self.request.user.is_staff
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that")
+        return redirect("home:dashboard")
+
+    def post(self, request, *args, **kwargs):
+        # Add an async task grouped as ``Digital Ocean Test``
+        result = "success"
+        try:
+            task_id = async_task(
+                "ghostwriter.shepherd.tasks.test_digital_ocean",
+                self.request.user,
+                group="Digital Ocean Test",
+            )
+            message = "Digital Ocean API key test has been successfully queued"
+        except Exception:
+            result = "error"
+            message = "Digital Ocean API key test could not be queued"
+
+        data = {
+            "result": result,
+            "message": message,
+        }
+        return JsonResponse(data)
+
+
+class TestNamecheapConnection(LoginRequiredMixin, UserPassesTestMixin, View):
+    """
+    Create an individual :model:`django_q.Task` under group ``Namecheap Test`` with
+    :task:`shepherd.tasks.test_namecheap` to test the Namecheap API configuration stored
+    in :model:`commandcenter.NamecheapConfiguration`.
+    """
+
+    def test_func(self):
+        return self.request.user.is_staff
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that")
+        return redirect("home:dashboard")
+
+    def post(self, request, *args, **kwargs):
+        # Add an async task grouped as ``Namecheap Test``
+        result = "success"
+        try:
+            task_id = async_task(
+                "ghostwriter.shepherd.tasks.test_namecheap",
+                self.request.user,
+                group="Namecheap Test",
+            )
+            message = "Namecheap API test has been successfully queued"
+        except Exception:
+            result = "error"
+            message = "Namecheap API test could not be queued"
+
+        data = {
+            "result": result,
+            "message": message,
+        }
+        return JsonResponse(data)
+
+
+class TestSlackConnection(LoginRequiredMixin, UserPassesTestMixin, View):
+    """
+    Create an individual :model:`django_q.Task` under group ``Slack Test`` with
+    :task:`shepherd.tasks.test_slack_webhook` to test the Slack Webhook configuration
+    stored in :model:`commandcenter.SlackConfiguration`.
+    """
+
+    def test_func(self):
+        return self.request.user.is_staff
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that")
+        return redirect("home:dashboard")
+
+    def post(self, request, *args, **kwargs):
+        # Add an async task grouped as ``Slack Test``
+        result = "success"
+        try:
+            task_id = async_task(
+                "ghostwriter.shepherd.tasks.test_slack_webhook",
+                self.request.user,
+                group="Slack Test",
+            )
+            message = "Slack Webhook test has been successfully queued"
+        except Exception:
+            result = "error"
+            message = "Slack Webhook test could not be queued"
+
+        data = {
+            "result": result,
+            "message": message,
+        }
+        return JsonResponse(data)
+
+
+class TestVirusTotalConnection(LoginRequiredMixin, UserPassesTestMixin, View):
+    """
+    Create an individual :model:`django_q.Task` under group ``VirusTotal Test`` with
+    :task:`shepherd.tasks.test_virustotal` to test the VirusTotal API key stored in
+    :model:`commandcenter.SlackConfiguration`.
+    """
+
+    def test_func(self):
+        return self.request.user.is_staff
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that")
+        return redirect("home:dashboard")
+
+    def post(self, request, *args, **kwargs):
+        # Add an async task grouped as ``VirusTotal Test``
+        result = "success"
+        try:
+            task_id = async_task(
+                "ghostwriter.shepherd.tasks.test_virustotal",
+                self.request.user,
+                group="Slack Test",
+            )
+            message = "VirusTotal API test has been successfully queued"
+        except Exception:
+            result = "error"
+            message = "VirusTotal API test could not be queued"
+
+        data = {
+            "result": result,
+            "message": message,
+        }
+        return JsonResponse(data)
