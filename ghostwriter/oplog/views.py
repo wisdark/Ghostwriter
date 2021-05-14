@@ -3,7 +3,7 @@
 # Standard Libraries
 import logging
 
-# Django & Other 3rd Party Libraries
+
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
@@ -104,8 +104,13 @@ def OplogListEntries(request, pk):
     :template:`oplog/entries_list.html`
     """
     entries = OplogEntry.objects.filter(oplog_id=pk).order_by("-start_date")
-    name = Oplog.objects.get(pk=pk).name
-    context = {"entries": entries, "pk": pk, "name": name}
+    oplog_instance = Oplog.objects.get(pk=pk)
+    context = {
+        "entries": entries,
+        "pk": pk,
+        "name": oplog_instance.name,
+        "project": oplog_instance.project,
+    }
     return render(request, "oplog/entries_list.html", context=context)
 
 

@@ -5,7 +5,7 @@ import json
 import logging
 import os
 
-# Django & Other 3rd Party Libraries
+# Django Imports
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.files.storage import FileSystemStorage
@@ -13,7 +13,6 @@ from django.db import models
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 
-# Ghostwriter Libraries
 from .validators import validate_evidence_extension
 
 # Using __name__ resolves to ghostwriter.reporting.models
@@ -69,7 +68,7 @@ class Severity(models.Model):
     count = property(count_findings)
 
     class Meta:
-        ordering = ["severity"]
+        ordering = ["weight", "severity"]
         verbose_name = "Severity rating"
         verbose_name_plural = "Severity ratings"
 
@@ -136,8 +135,7 @@ class Finding(models.Model):
         "Replication Steps",
         null=True,
         blank=True,
-        help_text="Provide an explanation for how the reader may reproduce "
-        "this finding",
+        help_text="Provide an explanation for how the reader may reproduce this finding",
     )
     host_detection_techniques = models.TextField(
         "Host Detection Techniques",
@@ -332,7 +330,7 @@ class Report(models.Model):
         "Creation Date", auto_now_add=True, help_text="Date the report was created"
     )
     last_update = models.DateField(
-        "Creation Date", auto_now=True, help_text="Date the report was last touched"
+        "Last Update", auto_now=True, help_text="Date the report was last touched"
     )
     complete = models.BooleanField(
         "Completed", default=False, help_text="Mark the report as complete"
@@ -635,9 +633,7 @@ class LocalFindingNote(models.Model):
         help_text="Provide additional information about the finding",
     )
     # Foreign Keys
-    finding = models.ForeignKey(
-        "ReportFindingLink", on_delete=models.CASCADE, null=False
-    )
+    finding = models.ForeignKey("ReportFindingLink", on_delete=models.CASCADE, null=False)
     operator = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True
     )

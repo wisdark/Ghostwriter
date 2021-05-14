@@ -5,7 +5,7 @@ import datetime
 import json
 from datetime import date
 
-# Django & Other 3rd Party Libraries
+# Django Imports
 from django.conf import settings
 from django.db import models
 from django.urls import reverse
@@ -34,7 +34,7 @@ class HealthStatus(models.Model):
     class Meta:
         ordering = ["health_status"]
         verbose_name = "Health status"
-        verbose_name_plural = "Health statuses"
+        verbose_name_plural = "Health status"
 
     def __str__(self):
         return self.health_status
@@ -61,7 +61,7 @@ class DomainStatus(models.Model):
     class Meta:
         ordering = ["domain_status"]
         verbose_name = "Domain status"
-        verbose_name_plural = "Domain statuses"
+        verbose_name_plural = "Domain status"
 
     def __str__(self):
         return self.domain_status
@@ -90,7 +90,7 @@ class WhoisStatus(models.Model):
     class Meta:
         ordering = ["whois_status"]
         verbose_name = "WHOIS status"
-        verbose_name_plural = "WHOIS statuses"
+        verbose_name_plural = "WHOIS status"
 
     def __str__(self):
         return self.whois_status
@@ -290,11 +290,15 @@ class Domain(models.Model):
     def get_absolute_url(self):
         return reverse("shepherd:domain_detail", args=[str(self.id)])
 
+    def clean(self, *args, **kwargs):
+        self.name = self.name.lower().replace(" ", "")
+        super(Domain, self).clean(*args, **kwargs)
+
     def get_domain_age(self):
         """
         Calculate the domain's age based on the current date and the instance's creation DateField.
         """
-        if self.is_expired:
+        if self.is_expired():
             time_delta = self.expiration - self.creation
         else:
             time_delta = date.today() - self.creation
@@ -442,7 +446,7 @@ class ServerStatus(models.Model):
 
         ordering = ["server_status"]
         verbose_name = "Server status"
-        verbose_name_plural = "Server statuses"
+        verbose_name_plural = "Server status"
 
     def __str__(self):
         return self.server_status
@@ -847,9 +851,7 @@ class AuxServerAddress(models.Model):
         help_text="Mark the address as the server's primary address",
     )
     # Foreign Keys
-    static_server = models.ForeignKey(
-        StaticServer, on_delete=models.CASCADE, null=False
-    )
+    static_server = models.ForeignKey(StaticServer, on_delete=models.CASCADE, null=False)
 
     class Meta:
         ordering = ["static_server", "ip_address"]

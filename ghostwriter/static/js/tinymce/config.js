@@ -24,12 +24,13 @@ function adjust_dialog() {
 
 // Default config for all TinyMCE editors
 var default_config = {
+    entity_encoding: 'raw',
     branding: false,
     width: '100%',
-    height: '300',
     theme: 'silver',
     skin: 'Ghostwriter',
-    selector: 'textarea',
+    selector: 'textarea:not(.empty-form textarea, .empty-form)',
+    content_css: '/static/css/wysiwyg_styles.css',
     editor_deselector: 'empty-form',
     menubar: 'file edit insert view format tools',
     visualchars_default_state: false,

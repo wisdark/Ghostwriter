@@ -1,19 +1,22 @@
 """This contains customizations for displaying the Rolodex application models in the admin panel."""
 
-# Django & Other 3rd Party Libraries
+# Django Imports
 from django.contrib import admin
 
-# Ghostwriter Libraries
 from .models import (
     Client,
     ClientContact,
     ClientNote,
+    ObjectivePriority,
     ObjectiveStatus,
     Project,
     ProjectAssignment,
     ProjectNote,
     ProjectObjective,
     ProjectRole,
+    ProjectScope,
+    ProjectSubTask,
+    ProjectTarget,
     ProjectType,
 )
 
@@ -112,3 +115,24 @@ class ObjectiveStatusAdmin(admin.ModelAdmin):
 @admin.register(ProjectObjective)
 class ProjectObjectiveAdmin(admin.ModelAdmin):
     pass
+
+
+@admin.register(ProjectTarget)
+class ProjectTargetAdmin(admin.ModelAdmin):
+    pass
+
+
+@admin.register(ProjectScope)
+class ProjectScopeAdmin(admin.ModelAdmin):
+    pass
+
+
+@admin.register(ProjectSubTask)
+class ProjectSubTaskAdmin(admin.ModelAdmin):
+    pass
+
+
+@admin.register(ObjectivePriority)
+class ObjectivePriorityAdmin(admin.ModelAdmin):
+    list_display = ("priority", "weight")
+    list_display_links = ("priority",)

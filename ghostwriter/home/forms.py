@@ -1,16 +1,12 @@
 """This contains all of the forms used by the Home application."""
 
-# Django & Other 3rd Party Libraries
-from crispy_forms.helper import FormHelper
-from crispy_forms.layout import (
-    HTML,
-    ButtonHolder,
-    Div,
-    Layout,
-    Submit,
-)
+# Django Imports
 from django import forms
 from django.contrib.auth import get_user_model
+
+# 3rd Party Libraries
+from crispy_forms.helper import FormHelper
+from crispy_forms.layout import HTML, ButtonHolder, Div, Layout, Submit
 
 # Ghostwriter Libraries
 from ghostwriter.home.models import UserProfile
@@ -39,15 +35,14 @@ class UserProfileForm(forms.ModelForm):
         self.helper.layout = Layout(
             HTML(
                 """
-                <strong><i class="far fa-images"></i> Avatar Upload</strong>
-                <hr>
+                <h4 class="icon avatar-upload-icon">Avatar Upload</h4>
                 """
             ),
             Div(
                 "avatar",
                 HTML(
                     """
-                    <label id="filename" class="custom-file-label" for="customFile">Choose avatar image file...</label>
+                    <label id="filename" class="custom-file-label" for="customFile">Choose an Avatar Image File...</label>
                     """
                 ),
                 css_class="custom-file",

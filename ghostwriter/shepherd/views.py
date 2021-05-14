@@ -5,7 +5,7 @@ import logging
 import logging.config
 from datetime import datetime
 
-# Django & Other 3rd Party Libraries
+# Django Imports
 from django import forms
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -20,6 +20,8 @@ from django.urls import reverse, reverse_lazy
 from django.utils.translation import gettext_lazy as _
 from django.views.generic.detail import DetailView, SingleObjectMixin
 from django.views.generic.edit import CreateView, DeleteView, UpdateView, View
+
+# 3rd Party Libraries
 from django_q.models import Task
 from django_q.tasks import async_task
 
@@ -100,9 +102,7 @@ def ajax_load_projects(request):
     client_id = request.GET.get("client")
     projects = Project.objects.filter(client_id=client_id).order_by("codename")
 
-    return render(
-        request, "shepherd/project_dropdown_list.html", {"projects": projects}
-    )
+    return render(request, "shepherd/project_dropdown_list.html", {"projects": projects})
 
 
 @login_required
@@ -136,9 +136,7 @@ def ajax_domain_overwatch(request):
         logger.exception("Received bad primary key values")
 
     if client_id and domain_id:
-        domain_history = History.objects.filter(
-            Q(domain=domain_id) & Q(client=client_id)
-        )
+        domain_history = History.objects.filter(Q(domain=domain_id) & Q(client=client_id))
         if domain_history:
             data = {
                 "result": "warning",
@@ -203,7 +201,7 @@ class DomainRelease(LoginRequiredMixin, SingleObjectMixin, View):
 class ServerRelease(LoginRequiredMixin, SingleObjectMixin, View):
     """
     Set the ``server_status`` field of an individual :model:`shepherd.StaticServer` to
-    the ``Available`` entry in :model:`shepherd.DomainStatus` and update the
+    the ``Available`` entry in :model:`shepherd.ServerStatus` and update the
     associated :model:`shepherd.ServerHistory` entry.
     """
 
@@ -345,10 +343,8 @@ class RegistrarSyncNamecheap(LoginRequiredMixin, View):
                 "ghostwriter.shepherd.tasks.fetch_namecheap_domains",
                 group="Namecheap Update",
             )
-            message = (
-                "Successfully queued Namecheap update task (Task ID {task})".format(
-                    task=task_id
-                )
+            message = "Successfully queued Namecheap update task (Task ID {task})".format(
+                task=task_id
             )
         except Exception:
             result = "error"
@@ -440,7 +436,7 @@ class TransientServerDelete(LoginRequiredMixin, SingleObjectMixin, View):
 
     def post(self, *args, **kwargs):
         self.object = self.get_object()
-        # self.object.delete()
+        self.object.delete()
         data = {"result": "success", "message": "VPS successfully deleted!"}
         logger.info(
             "Deleted %s %s by request of %s",
@@ -546,11 +542,14 @@ def server_list(request):
     :template:`shepherd/server_list.html`
     """
     servers_list = (
-        StaticServer.objects.select_related("server_status")
-        .all()
-        .order_by("ip_address")
+        StaticServer.objects.select_related("server_status").all().order_by("ip_address")
     )
-    servers_filter = ServerFilter(request.GET, queryset=servers_list)
+    # Copy the GET request data
+    data = request.GET.copy()
+    # If user has not submitted their own filter, default to showing only Available domains
+    if len(data) == 0:
+        data["server_status"] = 1
+    servers_filter = ServerFilter(data, queryset=servers_list)
     return render(request, "shepherd/server_list.html", {"filter": servers_filter})
 
 
@@ -654,6 +653,69 @@ def server_search(request):
 
 
 @login_required
+def infrastructure_search(request):
+    """
+    Search :model:`shepherd.StaticServer`, :model:`shepherd.AuxServerAddress`, and
+    :model:`shepherd:TransientServer` and return any matches with any related
+    :modeL`rolodex.Project` entries.
+    """
+    if request.method == "GET":
+        context = {}
+        search_term = ""
+        try:
+            if "query" in request.GET:
+                search_term = request.GET.get("query").strip()
+                if search_term is None or search_term == "":
+                    search_term = ""
+
+                if search_term:
+                    server_qs = StaticServer.objects.filter(
+                        Q(ip_address__contains=search_term)
+                        | Q(name__contains=search_term)
+                    )
+                    vps_qs = TransientServer.objects.select_related("project").filter(
+                        Q(ip_address__contains=search_term)
+                        | Q(name__contains=search_term)
+                    )
+                    aux_qs = AuxServerAddress.objects.select_related(
+                        "static_server"
+                    ).filter(ip_address__contains=search_term)
+
+                    total_result = server_qs.count() + vps_qs.count() + aux_qs.count()
+                    context = {
+                        "servers": server_qs,
+                        "vps": vps_qs,
+                        "addresses": aux_qs,
+                        "total_result": total_result,
+                    }
+
+                    if total_result > 0:
+                        messages.success(
+                            request,
+                            f"Found {total_result} results for: {search_term}",
+                            extra_tags="alert-success",
+                        )
+                    else:
+                        messages.warning(
+                            request,
+                            f"Found zero results for: {search_term}",
+                            extra_tags="alert-warning",
+                        )
+        except Exception:
+            messages.error(
+                request,
+                f"Failed searching for: {search_term}",
+                extra_tags="alert-danger",
+            )
+            logger.exception("Encountered error with search query")
+
+        return render(request, "shepherd/server_search.html", context)
+    else:
+        logger.info("LOLWTF")
+        return HttpResponseRedirect(reverse("rolodex:index"))
+
+
+@login_required
 def user_assets(request):
     """
     Display all :model:`shepherd.Domain` and :model:`shepherd.StaticServer` associated
@@ -676,9 +738,7 @@ def user_assets(request):
         domain_status__domain_status="Unavailable"
     )
     for domain in unavailable_domains:
-        domain_history = (
-            History.objects.filter(domain=domain).order_by("end_date").last()
-        )
+        domain_history = History.objects.filter(domain=domain).order_by("end_date").last()
         if domain_history:
             if domain_history.operator == request.user:
                 domains.append(domain_history)
@@ -819,6 +879,7 @@ def update(request):
     if request.method == "GET":
         # Get relevant configuration settings
         vt_config = VirusTotalConfiguration.get_solo()
+        enable_vt = vt_config.enable
         sleep_time = vt_config.sleep_time
         cloud_config = CloudServicesConfiguration.get_solo()
         enable_cloud_monitor = cloud_config.enable
@@ -833,9 +894,7 @@ def update(request):
             expired_status = DomainStatus.objects.get(domain_status="Expired")
         except DomainStatus.DoesNotExist:
             expired_status = None
-        total_domains = (
-            Domain.objects.all().exclude(domain_status=expired_status).count()
-        )
+        total_domains = Domain.objects.all().exclude(domain_status=expired_status).count()
         try:
             update_time = round(total_domains * sleep_time / 60, 2)
         except Exception:
@@ -914,6 +973,7 @@ def update(request):
         context = {
             "total_domains": total_domains,
             "update_time": update_time,
+            "enable_vt": enable_vt,
             "sleep_time": sleep_time,
             "cat_last_update_requested": cat_last_update_requested,
             "cat_last_update_completed": cat_last_update_completed,
@@ -1666,9 +1726,7 @@ class DomainServerConnectionCreate(LoginRequiredMixin, CreateView):
         )
 
     def get_form_kwargs(self, **kwargs):
-        form_kwargs = super(DomainServerConnectionCreate, self).get_form_kwargs(
-            **kwargs
-        )
+        form_kwargs = super(DomainServerConnectionCreate, self).get_form_kwargs(**kwargs)
         form_kwargs["project"] = self.project_instance
         return form_kwargs
 
@@ -1713,9 +1771,7 @@ class DomainServerConnectionUpdate(LoginRequiredMixin, UpdateView):
         )
 
     def get_form_kwargs(self, **kwargs):
-        form_kwargs = super(DomainServerConnectionUpdate, self).get_form_kwargs(
-            **kwargs
-        )
+        form_kwargs = super(DomainServerConnectionUpdate, self).get_form_kwargs(**kwargs)
         form_kwargs["project"] = self.object.project
         return form_kwargs
 

@@ -1,9 +1,8 @@
 """This contains all of the URL mappings used by the Shepherd application."""
 
-# Django & Other 3rd Party Libraries
+# Django Imports
 from django.urls import path
 
-# Ghostwriter Libraries
 from . import views
 
 app_name = "shepherd"
@@ -63,9 +62,7 @@ urlpatterns += [
         views.DomainUpdateHealth.as_view(),
         name="ajax_update_cat_single",
     ),
-    path(
-        "ajax/update/dns/all", views.DomainUpdateDNS.as_view(), name="ajax_update_dns"
-    ),
+    path("ajax/update/dns/all", views.DomainUpdateDNS.as_view(), name="ajax_update_dns"),
     path(
         "ajax/update/dns/<int:pk>",
         views.DomainUpdateDNS.as_view(),
@@ -112,6 +109,11 @@ urlpatterns += [
         name="server_checkout",
     ),
     path("servers/search", views.server_search, name="server_search"),
+    path(
+        "servers/search/all",
+        views.infrastructure_search,
+        name="infrastructure_search",
+    ),
 ]
 
 # URLs for creating, updating, and deleting domains

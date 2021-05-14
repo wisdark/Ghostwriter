@@ -1,10 +1,11 @@
 """This contains customizations for displaying the Shepherd application models in the admin panel."""
 
-# Django & Other 3rd Party Libraries
+# Django Imports
 from django.contrib import admin
+
+# 3rd Party Libraries
 from import_export.admin import ImportExportModelAdmin
 
-# Ghostwriter Libraries
 from .models import (
     ActivityType,
     AuxServerAddress,
@@ -98,7 +99,7 @@ class DomainAdmin(ImportExportModelAdmin):
         "name",
         "whois_status",
         "health_status",
-        "health_dns",
+        "last_health_check",
         "registrar",
         "note",
     )
@@ -107,9 +108,10 @@ class DomainAdmin(ImportExportModelAdmin):
     fieldsets = (
         (None, {"fields": ("name", "domain_status", "creation", "expiration")}),
         (
-            "Health Statuses",
+            "Health status",
             {
                 "fields": (
+                    "last_health_check",
                     "whois_status",
                     "health_status",
                     "health_dns",

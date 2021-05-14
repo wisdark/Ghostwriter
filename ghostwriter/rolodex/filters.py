@@ -1,14 +1,15 @@
 """This contains all of the model filters used by the Rolodex application."""
 
-# Django & Other 3rd Party Libraries
+# Django Imports
+from django import forms
+from django.forms.widgets import TextInput
+
+# 3rd Party Libraries
 import django_filters
 from crispy_forms.bootstrap import PrependedText
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import HTML, ButtonHolder, Column, Div, Layout, Row, Submit
-from django import forms
-from django.forms.widgets import TextInput
 
-# Ghostwriter Libraries
 from .models import Client, Project
 
 
@@ -28,7 +29,7 @@ class ClientFilter(django_filters.FilterSet):
         lookup_expr="icontains",
         widget=TextInput(
             attrs={
-                "placeholder": "Enter full or partial name...",
+                "placeholder": "Part of Name",
                 "autocomplete": "off",
             }
         ),
@@ -37,7 +38,7 @@ class ClientFilter(django_filters.FilterSet):
         lookup_expr="icontains",
         widget=TextInput(
             attrs={
-                "placeholder": "Enter full or codename...",
+                "placeholder": "Part of Codename",
                 "autocomplete": "off",
             }
         ),
@@ -68,7 +69,7 @@ class ClientFilter(django_filters.FilterSet):
                     css_class="form-row",
                 ),
                 ButtonHolder(
-                    Submit("submit", "Filter", css_class="btn btn-primary col-md-2"),
+                    Submit("submit_btn", "Filter", css_class="btn btn-primary col-md-2"),
                     HTML(
                         """
                         <a class="btn btn-outline-secondary col-md-2" role="button" href="{%  url 'rolodex:clients' %}">Reset</a>
@@ -102,7 +103,7 @@ class ProjectFilter(django_filters.FilterSet):
         lookup_expr="icontains",
         widget=TextInput(
             attrs={
-                "placeholder": "Enter full or codename...",
+                "placeholder": "Part of Codename",
                 "autocomplete": "off",
             }
         ),
@@ -111,17 +112,13 @@ class ProjectFilter(django_filters.FilterSet):
         lookup_expr="gte",
         field_name="start_date",
         label="Start Date",
-        widget=forms.DateInput(
-            attrs={"type": "date", "class": "dateinput form-control"}
-        ),
+        widget=forms.DateInput(attrs={"type": "date", "class": "dateinput form-control"}),
     )
     end_date = django_filters.DateFilter(
         lookup_expr="lte",
         field_name="end_date",
         label="End Date",
-        widget=forms.DateInput(
-            attrs={"type": "date", "class": "dateinput form-control"}
-        ),
+        widget=forms.DateInput(attrs={"type": "date", "class": "dateinput form-control"}),
     )
     start_date_range = django_filters.DateRangeFilter(
         field_name="start_date", empty_label="-- Relative Start Date --"
@@ -176,7 +173,7 @@ class ProjectFilter(django_filters.FilterSet):
                     css_class="form-row",
                 ),
                 ButtonHolder(
-                    Submit("submit", "Filter", css_class="btn btn-primary col-md-2"),
+                    Submit("submit_btn", "Filter", css_class="btn btn-primary col-md-2"),
                     HTML(
                         """
                         <a class="btn btn-outline-secondary col-md-2" role="button" href="{%  url 'rolodex:projects' %}">Reset</a>

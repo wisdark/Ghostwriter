@@ -1,8 +1,6 @@
 """This contains all of the views used by the Reporting application."""
 
 # Standard Libraries
-# Import Python libraries for various things
-from ghostwriter.commandcenter.models import ReportConfiguration
 import io
 import json
 import logging
@@ -11,9 +9,7 @@ import os
 import zipfile
 from datetime import datetime
 
-# Django & Other 3rd Party Libraries
-from asgiref.sync import async_to_sync
-from channels.layers import get_channel_layer
+# Django Imports
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
@@ -34,14 +30,20 @@ from django.urls import reverse, reverse_lazy
 from django.views import generic
 from django.views.generic.detail import DetailView, SingleObjectMixin
 from django.views.generic.edit import CreateView, DeleteView, UpdateView, View
+
+# 3rd Party Libraries
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
+from docx.image.exceptions import UnrecognizedImageError
 from docx.opc.exceptions import PackageNotFoundError as DocxPackageNotFoundError
 from pptx.exc import PackageNotFoundError as PptxPackageNotFoundError
 from xlsxwriter.workbook import Workbook
 
 # Ghostwriter Libraries
+from ghostwriter.commandcenter.models import ReportConfiguration
 from ghostwriter.modules import reportwriter
-from ghostwriter.rolodex.models import Project, ProjectAssignment
 from ghostwriter.modules.exceptions import MissingTemplate
+from ghostwriter.rolodex.models import Project, ProjectAssignment
 
 from .filters import ArchiveFilter, FindingFilter, ReportFilter
 from .forms import (
@@ -82,24 +84,6 @@ logger = logging.getLogger(__name__)
 
 
 @login_required
-def ajax_update_template_lint_results(request, pk):
-    """
-    Return an updated version of the template following a request to update linter results
-    for an individual :model:`reporting.ReportTemplate`.
-
-    **Template**
-
-    :template:`snippets/template_lint_results.html`
-    """
-    template_instance = get_object_or_404(ReportTemplate, pk=pk)
-    html = render_to_string(
-        "snippets/template_lint_results.html",
-        {"reporttemplate": template_instance},
-    )
-    return HttpResponse(html)
-
-
-@login_required
 def ajax_update_report_findings(request):
     """
     Update the ``position`` and ``severity`` fields of all :model:`reporting.ReportFindingLink`
@@ -124,7 +108,6 @@ def ajax_update_report_findings(request):
             severity = None
         if severity:
             counter = 1
-            logger.info(order)
             for finding_id in order:
                 if "placeholder" not in finding_id:
                     finding_instance = ReportFindingLink.objects.get(id=finding_id)
@@ -139,14 +122,33 @@ def ajax_update_report_findings(request):
                             finding_id,
                         )
         else:
-            data = {
-                "result": "specified severity, {}, is invalid".format(severity_class)
-            }
+            data = {"result": "specified severity, {}, is invalid".format(severity_class)}
         # If all went well, return success
         data = {"result": "success"}
     else:
         data = {"result": "error"}
     return JsonResponse(data)
+
+
+class UpdateTemplateLintResults(LoginRequiredMixin, SingleObjectMixin, View):
+    """
+    Return an updated version of the template following a request to update linter results
+    for an individual :model:`reporting.ReportTemplate`.
+
+    **Template**
+
+    :template:`snippets/template_lint_results.html`
+    """
+
+    model = ReportTemplate
+
+    def get(self, *args, **kwargs):
+        self.object = self.get_object()
+        html = render_to_string(
+            "snippets/template_lint_results.html",
+            {"reporttemplate": self.object},
+        )
+        return HttpResponse(html)
 
 
 class FindingAssignment(LoginRequiredMixin, SingleObjectMixin, View):
@@ -282,8 +284,7 @@ class ReportFindingLinkDelete(LoginRequiredMixin, SingleObjectMixin, View):
 
         # Get all other findings with the same severity for this report ID
         findings_queryset = ReportFindingLink.objects.filter(
-            Q(report=self.get_object().report.pk)
-            & Q(severity=self.get_object().severity)
+            Q(report=self.get_object().report.pk) & Q(severity=self.get_object().severity)
         )
         if findings_queryset:
             for finding in findings_queryset:
@@ -360,7 +361,7 @@ class ReportStatusToggle(LoginRequiredMixin, SingleObjectMixin, View):
                 data = {
                     "result": "success",
                     "message": "Report successfully marked as incomplete",
-                    "status": "In Progress",
+                    "status": "Draft",
                     "toggle": 0,
                 }
             else:
@@ -505,25 +506,28 @@ class ReportTemplateSwap(LoginRequiredMixin, SingleObjectMixin, View):
                 docx_template_id = int(docx_template_id)
                 pptx_template_id = int(pptx_template_id)
 
-                if docx_template_id == -1:
-                    pass
+                if docx_template_id == -1 or pptx_template_id == -1:
+                    data = {
+                        "result": "warning",
+                        "message": "You need to select a template",
+                    }
                 else:
-                    docx_template_query = ReportTemplate.objects.get(
-                        pk=docx_template_id
-                    )
-                    self.object.docx_template = docx_template_query
+                    if not docx_template_id == -1:
+                        docx_template_query = ReportTemplate.objects.get(
+                            pk=docx_template_id
+                        )
+                        self.object.docx_template = docx_template_query
+                    if not pptx_template_id == -1:
+                        pptx_template_query = ReportTemplate.objects.get(
+                            pk=pptx_template_id
+                        )
+                        self.object.pptx_template = pptx_template_query
+                    data = {
+                        "result": "success",
+                        "message": "Template successfully swapped",
+                    }
+                    self.object.save()
 
-                if pptx_template_id == -1:
-                    pass
-                else:
-                    pptx_template_query = ReportTemplate.objects.get(
-                        pk=pptx_template_id
-                    )
-                    self.object.pptx_template = pptx_template_query
-
-                self.object.save()
-
-                data = {"result": "success", "message": "Template successfully swapped"}
                 # Check template for linting issues
                 try:
                     if docx_template_query:
@@ -840,350 +844,18 @@ def upload_evidence_modal_success(request):
 def generate_report_name(report_instance):
     """
     Generate a filename for a report based on the current time and attributes of an
-    individual :model:`reporting.Report`.
+    individual :model:`reporting.Report`. All periods and commas are removed to keep
+    the filename browser-friendly.
     """
+
+    def replace_chars(report_name):
+        return report_name.replace(".", "").replace(",", "")
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     client_name = report_instance.project.client
     assessment_type = report_instance.project.project_type
-    report_name = f"{timestamp}_{client_name}_{assessment_type}"
+    report_name = replace_chars(f"{timestamp}_{client_name}_{assessment_type}")
     return report_name
-
-
-@login_required
-def generate_docx(request, pk):
-    """
-    Generate a Word document report for an individual :model:`reporting.Report`.
-    """
-    try:
-        report_instance = Report.objects.get(pk=pk)
-        output_path = os.path.join(settings.MEDIA_ROOT, report_instance.title)
-        evidence_path = os.path.join(settings.MEDIA_ROOT)
-        report_name = generate_report_name(report_instance)
-
-        # Get the template for this report
-        if report_instance.docx_template:
-            report_template = report_instance.docx_template
-        else:
-            report_config = ReportConfiguration.get_solo()
-            report_template = report_config.default_docx_template
-            if not report_template:
-                raise MissingTemplate
-        template_loc = report_template.document.path
-
-        # Check template's linting status
-        template_status = report_template.get_status()
-        if template_status == "error" or template_status == "failed":
-            messages.error(
-                request,
-                "The selected report template has linting errors and cannot be used to render a Word document",
-                extra_tags="alert-danger",
-            )
-            return HttpResponseRedirect(
-                reverse("reporting:report_detail", kwargs={"pk": report_instance.pk})
-            )
-
-        # Template available and passes linting checks, so proceed with generation
-        engine = reportwriter.Reportwriter(
-            report_instance, output_path, evidence_path, template_loc
-        )
-
-        docx = engine.generate_word_docx()
-        response = HttpResponse(
-            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        )
-        response["Content-Disposition"] = f"attachment; filename={report_name}.docx"
-        docx.save(response)
-        return response
-    except MissingTemplate:
-        messages.error(
-            request,
-            "You do not have a Word template selected and have not configured a default template",
-            extra_tags="alert-danger",
-        )
-        return HttpResponseRedirect(
-            reverse("reporting:report_detail", kwargs={"pk": pk})
-        )
-    except Report.DoesNotExist:
-        messages.error(
-            request,
-            "The target report does not exist",
-            extra_tags="alert-danger",
-        )
-    except ReportTemplate.DoesNotExist:
-        messages.error(
-            request,
-            "You do not have a Word template selected and have not configured a default template",
-            extra_tags="alert-danger",
-        )
-        return HttpResponseRedirect(
-            reverse("reporting:report_detail", kwargs={"pk": pk})
-        )
-    except DocxPackageNotFoundError:
-        messages.error(
-            request,
-            "Your selected Word template could not be found on the server – try uploading it again",
-            extra_tags="alert-danger",
-        )
-    except FileNotFoundError as error:
-        messages.error(
-            request,
-            "Halted document generation because an evidence file is missing: {}".format(
-                error
-            ),
-            extra_tags="alert-danger",
-        )
-    except Exception as error:
-        messages.error(
-            request,
-            "Encountered an error generating the document: {}".format(error)
-            .replace('"', "")
-            .replace("'", "`"),
-            extra_tags="alert-danger",
-        )
-    return HttpResponseRedirect(reverse("reporting:report_detail", kwargs={"pk": pk}))
-
-
-@login_required
-def generate_xlsx(request, pk):
-    """
-    Generate an Excel spreadsheet for an individual :model:`reporting.Report`.
-    """
-    try:
-        report_instance = Report.objects.get(pk=pk)
-        output_path = os.path.join(settings.MEDIA_ROOT, report_instance.title)
-        evidence_path = os.path.join(settings.MEDIA_ROOT)
-        report_name = generate_report_name(report_instance)
-
-        engine = reportwriter.Reportwriter(
-            report_instance, output_path, evidence_path, template_loc=None
-        )
-        output = io.BytesIO()
-        workbook = Workbook(output, {"in_memory": True})
-        engine.generate_excel_xlsx(workbook)
-        output.seek(0)
-        response = HttpResponse(
-            output.read(),
-            content_type="application/application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-        response["Content-Disposition"] = f"attachment; filename={report_name}.xlsx"
-        output.close()
-        return response
-    except Report.DoesNotExist:
-        messages.error(
-            request,
-            "The target report does not exist",
-            extra_tags="alert-danger",
-        )
-    except Exception as error:
-        messages.error(
-            request,
-            "Encountered an error generating the spreadsheet: {}".format(error),
-            extra_tags="alert-danger",
-        )
-    return HttpResponseRedirect(reverse("reporting:report_detail", kwargs={"pk": pk}))
-
-
-@login_required
-def generate_pptx(request, pk):
-    """
-    Generate a PowerPoint slide deck for an individual :model:`reporting.Report`.
-    """
-    try:
-        report_instance = Report.objects.get(pk=pk)
-        output_path = os.path.join(settings.MEDIA_ROOT, report_instance.title)
-        evidence_path = os.path.join(settings.MEDIA_ROOT)
-        report_name = generate_report_name(report_instance)
-
-        # Get the template for this report
-        if report_instance.docx_template:
-            report_template = report_instance.pptx_template
-        else:
-            report_config = ReportConfiguration.get_solo()
-            report_template = report_config.default_pptx_template
-            if not report_template:
-                raise MissingTemplate
-        template_loc = report_template.document.path
-
-        engine = reportwriter.Reportwriter(
-            report_instance, output_path, evidence_path, template_loc
-        )
-        pptx = engine.generate_powerpoint_pptx()
-        response = HttpResponse(
-            content_type="application/application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        )
-        response["Content-Disposition"] = f"attachment; filename={report_name}.pptx"
-        pptx.save(response)
-        return response
-    except MissingTemplate:
-        messages.error(
-            request,
-            "You do not have a PowerPoint template selected and have not configured a default template",
-            extra_tags="alert-danger",
-        )
-        return HttpResponseRedirect(
-            reverse("reporting:report_detail", kwargs={"pk": pk})
-        )
-    except ValueError as exception:
-        messages.error(
-            request,
-            f"Your selected template could not be loaded as a PowerPoint template: {exception}",
-            extra_tags="alert-danger",
-        )
-    except Report.DoesNotExist:
-        messages.error(
-            request,
-            "The target report does not exist",
-            extra_tags="alert-danger",
-        )
-    except ReportTemplate.DoesNotExist:
-        messages.error(
-            request,
-            "You do not have a PowerPoint template selected and have not configured a default template",
-            extra_tags="alert-danger",
-        )
-        return HttpResponseRedirect(
-            reverse("reporting:report_detail", kwargs={"pk": pk})
-        )
-    except PptxPackageNotFoundError:
-        messages.error(
-            request,
-            "Your selected PowerPoint template could not be found on the server – try uploading it again",
-            extra_tags="alert-danger",
-        )
-        return HttpResponseRedirect(
-            reverse("reporting:report_detail", kwargs={"pk": pk})
-        )
-    except Exception as error:
-        messages.error(
-            request,
-            "Encountered an error generating the document: {}".format(error),
-            extra_tags="alert-danger",
-        )
-    return HttpResponseRedirect(reverse("reporting:report_detail", kwargs={"pk": pk}))
-
-
-@login_required
-def generate_json(request, pk):
-    """
-    Generate a JSON report for an individual :model:`reporting.Report`.
-    """
-    report_instance = get_object_or_404(Report, pk=pk)
-    output_path = os.path.join(settings.MEDIA_ROOT, report_instance.title)
-    evidence_path = os.path.join(settings.MEDIA_ROOT)
-    engine = reportwriter.Reportwriter(
-        report_instance, output_path, evidence_path, template_loc=None
-    )
-    json_report = engine.generate_json()
-    return HttpResponse(json_report, "application/json")
-
-
-@login_required
-def generate_all(request, pk):
-    """
-    Generate all report types for an individual :model:`reporting.Report`.
-    """
-    try:
-        report_instance = Report.objects.get(pk=pk)
-        output_path = os.path.join(settings.MEDIA_ROOT, report_instance.title)
-        evidence_path = os.path.join(settings.MEDIA_ROOT)
-        report_name = generate_report_name(report_instance)
-
-        # Get the templates for Word and PowerPoint
-        if report_instance.docx_template:
-            docx_template = report_instance.docx_template
-        else:
-            report_config = ReportConfiguration.get_solo()
-            docx_template = report_config.default_docx_template
-            if not docx_template:
-                raise MissingTemplate
-        docx_template = docx_template.document.path
-
-        if report_instance.docx_template:
-            pptx_template = report_instance.pptx_template
-        else:
-            report_config = ReportConfiguration.get_solo()
-            pptx_template = report_config.default_pptx_template
-            if not pptx_template:
-                raise MissingTemplate
-        pptx_template = pptx_template.document.path
-
-        engine = reportwriter.Reportwriter(
-            report_instance, output_path, evidence_path, template_loc=None
-        )
-        json_doc, word_doc, excel_doc, ppt_doc = engine.generate_all_reports(
-            docx_template, pptx_template
-        )
-
-        # Convert the dict to pretty JSON output for the file
-        pretty_json = json.dumps(json_doc, indent=4)
-
-        # Create a zip file in memory and add the reports to it
-        zip_buffer = io.BytesIO()
-        zf = zipfile.ZipFile(zip_buffer, "a")
-        zf.writestr("report.json", pretty_json)
-        zf.writestr("report.docx", word_doc.getvalue())
-        zf.writestr("report.xlsx", excel_doc.getvalue())
-        zf.writestr("report.pptx", ppt_doc.getvalue())
-        zf.close()
-        zip_buffer.seek(0)
-
-        # Return the buffer in the HTTP response
-        response = HttpResponse(content_type="application/x-zip-compressed")
-        response["Content-Disposition"] = f"attachment; filename={report_name}.zip"
-        response.write(zip_buffer.read())
-        return response
-    except MissingTemplate:
-        messages.error(
-            request,
-            "You do not have a PowerPoint template selected and have not configured a default template",
-            extra_tags="alert-danger",
-        )
-        return HttpResponseRedirect(
-            reverse("reporting:report_detail", kwargs={"pk": pk})
-        )
-    except ValueError as exception:
-        messages.error(
-            request,
-            f"Your selected template could not be loaded as a PowerPoint template: {exception}",
-            extra_tags="alert-danger",
-        )
-    except Report.DoesNotExist:
-        messages.error(
-            request,
-            "The target report does not exist",
-            extra_tags="alert-danger",
-        )
-    except ReportTemplate.DoesNotExist:
-        messages.error(
-            request,
-            "You do not have a PowerPoint template selected and have not configured a default template",
-            extra_tags="alert-danger",
-        )
-        return HttpResponseRedirect(
-            reverse("reporting:report_detail", kwargs={"pk": pk})
-        )
-    except DocxPackageNotFoundError:
-        messages.error(
-            request,
-            "Your selected Word template could not be found on the server – try uploading it again",
-            extra_tags="alert-danger",
-        )
-    except PptxPackageNotFoundError:
-        messages.error(
-            request,
-            "Your selected PowerPoint template could not be found on the server – try uploading it again",
-            extra_tags="alert-danger",
-        )
-        return HttpResponseRedirect(
-            reverse("reporting:report_detail", kwargs={"pk": pk})
-        )
-    except Exception as error:
-        messages.error(
-            request,
-            "Encountered an error generating the document: {}".format(error),
-            extra_tags="alert-danger",
-        )
-    return HttpResponseRedirect(reverse("reporting:report_detail", kwargs={"pk": pk}))
 
 
 @login_required
@@ -1209,9 +881,9 @@ def archive(request, pk):
     single Zip file for arhciving.
     """
     try:
-        report_instance = Report.objects.select_related(
-            "project", "project__client"
-        ).get(pk=pk)
+        report_instance = Report.objects.select_related("project", "project__client").get(
+            pk=pk
+        )
         output_path = os.path.join(settings.MEDIA_ROOT, report_instance.title)
         evidence_path = os.path.join(settings.MEDIA_ROOT)
         archive_loc = os.path.join(settings.MEDIA_ROOT, "archives")
@@ -1252,9 +924,7 @@ def archive(request, pk):
         zip_directory(evidence_loc, zf)
         zf.close()
         zip_buffer.seek(0)
-        with open(
-            os.path.join(archive_loc, report_name + ".zip"), "wb"
-        ) as archive_file:
+        with open(os.path.join(archive_loc, report_name + ".zip"), "wb") as archive_file:
             archive_file.write(zip_buffer.read())
             new_archive = Archive(
                 client=report_instance.project.client,
@@ -1281,9 +951,7 @@ def archive(request, pk):
             "You do not have templates selected for Word and PowerPoint and have not selected default templates",
             extra_tags="alert-danger",
         )
-        return HttpResponseRedirect(
-            reverse("reporting:report_detail", kwargs={"pk": pk})
-        )
+        return HttpResponseRedirect(reverse("reporting:report_detail", kwargs={"pk": pk}))
     except Exception:
         messages.error(
             request,
@@ -1317,9 +985,7 @@ def clone_report(request, pk):
     """
     Create an identical copy of an individual :model:`reporting.Report`.
     """
-    report_instance = ReportFindingLink.objects.select_related("report").filter(
-        report=pk
-    )
+    report_instance = ReportFindingLink.objects.select_related("report").filter(report=pk)
     # Clone the report by editing title, setting PK to `None`, and saving it
     report_to_clone = report_instance[0].report
     report_to_clone.title = report_to_clone.title + " Copy"
@@ -1382,7 +1048,7 @@ def export_findings_to_csv(request):
     fiinding_resource = FindingResource()
     dataset = fiinding_resource.export()
     response = HttpResponse(dataset.csv, content_type="text/csv")
-    response["Content-Disposition"] = f"attachment; filename={timestamp}_findings.csv"
+    response["Content-Disposition"] = f'attachment; filename="{timestamp}_findings.csv"'
 
     return response
 
@@ -1531,11 +1197,17 @@ class ReportDetailView(LoginRequiredMixin, DetailView):
         form = SelectReportTemplateForm(instance=self.object)
         form.fields["docx_template"].queryset = ReportTemplate.objects.filter(
             Q(doc_type__doc_type="docx") & Q(client=self.object.project.client)
-            | Q(client__isnull=True)
+            | Q(doc_type__doc_type="docx") & Q(client__isnull=True)
+        ).select_related(
+            "doc_type",
+            "client",
         )
         form.fields["pptx_template"].queryset = ReportTemplate.objects.filter(
             Q(doc_type__doc_type="pptx") & Q(client=self.object.project.client)
-            | Q(client__isnull=True)
+            | Q(doc_type__doc_type="pptx") & Q(client__isnull=True)
+        ).select_related(
+            "doc_type",
+            "client",
         )
         ctx["form"] = form
         return ctx
@@ -1774,7 +1446,7 @@ class ReportTemplateCreate(LoginRequiredMixin, CreateView):
     def get_initial(self):
         date = datetime.now().strftime("%d %B %Y")
         initial_upload = f'<p><span class="bold">{date}</span></p><p>Initial upload</p>'
-        return {"uploaded_by": self.request.user, "changelog": initial_upload}
+        return {"changelog": initial_upload}
 
     def get_success_url(self):
         messages.success(
@@ -1783,6 +1455,12 @@ class ReportTemplateCreate(LoginRequiredMixin, CreateView):
             extra_tags="alert-success",
         )
         return reverse("reporting:template_detail", kwargs={"pk": self.object.pk})
+
+    def form_valid(self, form, **kwargs):
+        self.object = form.save(commit=False)
+        self.object.uploaded_by = self.request.user
+        self.object.save()
+        return HttpResponseRedirect(self.get_success_url())
 
 
 class ReportTemplateUpdate(LoginRequiredMixin, PermissionRequiredMixin, UpdateView):
@@ -1834,6 +1512,12 @@ class ReportTemplateUpdate(LoginRequiredMixin, PermissionRequiredMixin, UpdateVi
             extra_tags="alert-success",
         )
         return reverse("reporting:template_detail", kwargs={"pk": self.object.pk})
+
+    def form_valid(self, form, **kwargs):
+        self.object = form.save(commit=False)
+        self.object.uploaded_by = self.request.user
+        self.object.save()
+        return HttpResponseRedirect(self.get_success_url())
 
 
 class ReportTemplateDelete(LoginRequiredMixin, DeleteView):
@@ -1922,6 +1606,449 @@ class ReportTemplateDownload(LoginRequiredMixin, SingleObjectMixin, View):
             )
         else:
             raise Http404
+
+
+class GenerateReportJSON(LoginRequiredMixin, SingleObjectMixin, View):
+    """
+    Generate a JSON report for an individual :model:`reporting.Report`.
+    """
+
+    model = Report
+
+    def get(self, *args, **kwargs):
+        self.object = self.get_object()
+
+        logger.info(
+            "Generating JSON report for %s %s by request of %s",
+            self.object.__class__.__name__,
+            self.object.id,
+            self.request.user,
+        )
+
+        engine = reportwriter.Reportwriter(self.object, template_loc=None)
+        json_report = engine.generate_json()
+
+        return HttpResponse(json_report, "application/json")
+
+
+class GenerateReportDOCX(LoginRequiredMixin, SingleObjectMixin, View):
+    """
+    Generate a DOCX report for an individual :model:`reporting.Report`.
+    """
+
+    model = Report
+
+    def get(self, *args, **kwargs):
+        self.object = self.get_object()
+
+        logger.info(
+            "Generating DOCX report for %s %s by request of %s",
+            self.object.__class__.__name__,
+            self.object.id,
+            self.request.user,
+        )
+
+        try:
+            report_name = generate_report_name(self.object)
+            engine = reportwriter.Reportwriter(self.object, template_loc=None)
+
+            # Get the template for this report
+            if self.object.docx_template:
+                report_template = self.object.docx_template
+            else:
+                report_config = ReportConfiguration.get_solo()
+                report_template = report_config.default_docx_template
+                if not report_template:
+                    raise MissingTemplate
+            template_loc = report_template.document.path
+
+            # Check template's linting status
+            template_status = report_template.get_status()
+            if template_status == "error" or template_status == "failed":
+                messages.error(
+                    self.request,
+                    "The selected report template has linting errors and cannot be used to render a DOCX document",
+                    extra_tags="alert-danger",
+                )
+                return HttpResponseRedirect(
+                    reverse("reporting:report_detail", kwargs={"pk": self.object.pk})
+                )
+
+            # Template available and passes linting checks, so proceed with generation
+            engine = reportwriter.Reportwriter(self.object, template_loc)
+            docx = engine.generate_word_docx()
+
+            response = HttpResponse(
+                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
+            response["Content-Disposition"] = f'attachment; filename="{report_name}.docx"'
+            docx.save(response)
+
+            # Send WebSocket message to update user's webpage
+            async_to_sync(channel_layer.group_send)(
+                "report_{}".format(self.object.pk),
+                {
+                    "type": "status_update",
+                    "message": {"status": "success"},
+                },
+            )
+
+            return response
+        except MissingTemplate:
+            logger.error(
+                "DOCX generation failed for %s %s and user %s because no template was configured",
+                self.object.__class__.__name__,
+                self.object.id,
+                self.request.user,
+            )
+            messages.error(
+                self.request,
+                "You do not have a Word template selected and have not configured a default template",
+                extra_tags="alert-danger",
+            )
+        except DocxPackageNotFoundError:
+            logger.exception(
+                "DOCX generation failed for %s %s and user %s because the template file was missing",
+                self.object.__class__.__name__,
+                self.object.id,
+                self.request.user,
+            )
+            messages.error(
+                self.request,
+                "Your selected Word template could not be found on the server – try uploading it again",
+                extra_tags="alert-danger",
+            )
+        except FileNotFoundError as error:
+            logger.exception(
+                "DOCX generation failed for %s %s and user %s because an evidence file was missing",
+                self.object.__class__.__name__,
+                self.object.id,
+                self.request.user,
+            )
+            messages.error(
+                self.request,
+                "Halted document generation because an evidence file is missing: {}".format(
+                    error
+                ),
+                extra_tags="alert-danger",
+            )
+        except UnrecognizedImageError as error:
+            logger.exception(
+                "DOCX generation failed for %s %s and user %s because of an unrecognized or corrupt image",
+                self.object.__class__.__name__,
+                self.object.id,
+                self.request.user,
+            )
+            messages.error(
+                self.request,
+                "Encountered an error generating the document: {}".format(error)
+                .replace('"', "")
+                .replace("'", "`"),
+                extra_tags="alert-danger",
+            )
+        except Exception as error:
+            logger.exception(
+                "DOCX generation failed unexpectedly for %s %s and user %s",
+                self.object.__class__.__name__,
+                self.object.id,
+                self.request.user,
+            )
+            messages.error(
+                self.request,
+                "Encountered an error generating the document: {}".format(error)
+                .replace('"', "")
+                .replace("'", "`"),
+                extra_tags="alert-danger",
+            )
+
+        return HttpResponseRedirect(
+            reverse("reporting:report_detail", kwargs={"pk": self.object.pk})
+        )
+
+
+class GenerateReportXLSX(LoginRequiredMixin, SingleObjectMixin, View):
+    """
+    Generate an XLSX report for an individual :model:`reporting.Report`.
+    """
+
+    model = Report
+
+    def get(self, *args, **kwargs):
+        self.object = self.get_object()
+
+        logger.info(
+            "Generating XLSX report for %s %s by request of %s",
+            self.object.__class__.__name__,
+            self.object.id,
+            self.request.user,
+        )
+        try:
+            report_name = generate_report_name(self.object)
+            engine = reportwriter.Reportwriter(self.object, template_loc=None)
+
+            output = io.BytesIO()
+            workbook = Workbook(output, {"in_memory": True})
+            engine.generate_excel_xlsx(workbook)
+            output.seek(0)
+            response = HttpResponse(
+                output.read(),
+                content_type="application/application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            response["Content-Disposition"] = f'attachment; filename="{report_name}.xlsx"'
+            output.close()
+
+            return response
+        except Exception as error:
+            logger.exception(
+                "XLSX generation failed unexpectedly for %s %s and user %s",
+                self.object.__class__.__name__,
+                self.object.id,
+                self.request.user,
+            )
+            messages.error(
+                self.request,
+                "Encountered an error generating the spreadsheet: {}".format(error),
+                extra_tags="alert-danger",
+            )
+        return HttpResponseRedirect(
+            reverse("reporting:report_detail", kwargs={"pk": self.object.pk})
+        )
+
+
+class GenerateReportPPTX(LoginRequiredMixin, SingleObjectMixin, View):
+    """
+    Generate a PPTX report for an individual :model:`reporting.Report`.
+    """
+
+    model = Report
+
+    def get(self, *args, **kwargs):
+        self.object = self.get_object()
+
+        logger.info(
+            "Generating PPTX report for %s %s by request of %s",
+            self.object.__class__.__name__,
+            self.object.id,
+            self.request.user,
+        )
+
+        try:
+            report_name = generate_report_name(self.object)
+            engine = reportwriter.Reportwriter(self.object, template_loc=None)
+
+            # Get the template for this report
+            if self.object.pptx_template:
+                report_template = self.object.pptx_template
+            else:
+                report_config = ReportConfiguration.get_solo()
+                report_template = report_config.default_pptx_template
+                if not report_template:
+                    raise MissingTemplate
+            template_loc = report_template.document.path
+
+            # Check template's linting status
+            template_status = report_template.get_status()
+            if template_status == "error" or template_status == "failed":
+                messages.error(
+                    self.request,
+                    "The selected report template has linting errors and cannot be used to render a PPTX document",
+                    extra_tags="alert-danger",
+                )
+                return HttpResponseRedirect(
+                    reverse("reporting:report_detail", kwargs={"pk": self.object.pk})
+                )
+
+            # Template available and passes linting checks, so proceed with generation
+            engine = reportwriter.Reportwriter(self.object, template_loc)
+            pptx = engine.generate_powerpoint_pptx()
+            response = HttpResponse(
+                content_type="application/application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            )
+            response["Content-Disposition"] = f'attachment; filename="{report_name}.pptx"'
+            pptx.save(response)
+
+            return response
+        except MissingTemplate:
+            logger.error(
+                "PPTX generation failed for %s %s and user %s because no template was configured",
+                self.object.__class__.__name__,
+                self.object.id,
+                self.request.user,
+            )
+            messages.error(
+                self.request,
+                "You do not have a PowerPoint template selected and have not configured a default template",
+                extra_tags="alert-danger",
+            )
+        except ValueError as exception:
+            logger.exception(
+                "PPTX generation failed for %s %s and user %s because the template could not be loaded as a PPTX",
+                self.object.__class__.__name__,
+                self.object.id,
+                self.request.user,
+            )
+            messages.error(
+                self.request,
+                f"Your selected template could not be loaded as a PowerPoint template: {exception}",
+                extra_tags="alert-danger",
+            )
+        except PptxPackageNotFoundError:
+            logger.exception(
+                "PPTX generation failed for %s %s and user %s because the template file was missing",
+                self.object.__class__.__name__,
+                self.object.id,
+                self.request.user,
+            )
+            messages.error(
+                self.request,
+                "Your selected PowerPoint template could not be found on the server – try uploading it again",
+                extra_tags="alert-danger",
+            )
+        except FileNotFoundError as error:
+            logger.exception(
+                "PPTX generation failed for %s %s and user %s because an evidence file was missing",
+                self.object.__class__.__name__,
+                self.object.id,
+                self.request.user,
+            )
+            messages.error(
+                self.request,
+                "Halted document generation because an evidence file is missing: {}".format(
+                    error
+                ),
+                extra_tags="alert-danger",
+            )
+        except UnrecognizedImageError as error:
+            logger.exception(
+                "PPTX generation failed for %s %s and user %s because of an unrecognized or corrupt image",
+                self.object.__class__.__name__,
+                self.object.id,
+                self.request.user,
+            )
+            messages.error(
+                self.request,
+                "Encountered an error generating the document: {}".format(error)
+                .replace('"', "")
+                .replace("'", "`"),
+                extra_tags="alert-danger",
+            )
+        except Exception as error:
+            logger.exception(
+                "PPTX generation failed unexpectedly for %s %s and user %s",
+                self.object.__class__.__name__,
+                self.object.id,
+                self.request.user,
+            )
+            messages.error(
+                self.request,
+                "Encountered an error generating the document: {}".format(error)
+                .replace('"', "")
+                .replace("'", "`"),
+                extra_tags="alert-danger",
+            )
+
+        return HttpResponseRedirect(
+            reverse("reporting:report_detail", kwargs={"pk": self.object.pk})
+        )
+
+
+class GenerateReportAll(LoginRequiredMixin, SingleObjectMixin, View):
+    """
+    Generate all report types for an individual :model:`reporting.Report`.
+    """
+
+    model = Report
+
+    def get(self, *args, **kwargs):
+        self.object = self.get_object()
+
+        logger.info(
+            "Generating PPTX report for %s %s by request of %s",
+            self.object.__class__.__name__,
+            self.object.id,
+            self.request.user,
+        )
+        try:
+            report_name = generate_report_name(self.object)
+            engine = reportwriter.Reportwriter(self.object, template_loc=None)
+
+            # Get the templates for Word and PowerPoint
+            if self.object.docx_template:
+                docx_template = self.object.docx_template
+            else:
+                report_config = ReportConfiguration.get_solo()
+                docx_template = report_config.default_docx_template
+                if not docx_template:
+                    raise MissingTemplate
+            docx_template = docx_template.document.path
+
+            if self.object.pptx_template:
+                pptx_template = self.object.pptx_template
+            else:
+                report_config = ReportConfiguration.get_solo()
+                pptx_template = report_config.default_pptx_template
+                if not pptx_template:
+                    raise MissingTemplate
+            pptx_template = pptx_template.document.path
+
+            # Generate all types of reports
+            json_doc, docx_doc, xlsx_doc, pptx_doc = engine.generate_all_reports(
+                docx_template, pptx_template
+            )
+
+            # Convert the dict to pretty JSON output for the file
+            pretty_json = json.dumps(json_doc, indent=4)
+
+            # Create a zip file in memory and add the reports to it
+            zip_buffer = io.BytesIO()
+            zf = zipfile.ZipFile(zip_buffer, "a")
+            zf.writestr(f"{report_name}.json", pretty_json)
+            zf.writestr(f"{report_name}.docx", docx_doc.getvalue())
+            zf.writestr(f"{report_name}.xlsx", xlsx_doc.getvalue())
+            zf.writestr(f"{report_name}.pptx", pptx_doc.getvalue())
+            zf.close()
+            zip_buffer.seek(0)
+
+            # Return the buffer in the HTTP response
+            response = HttpResponse(content_type="application/x-zip-compressed")
+            response["Content-Disposition"] = f'attachment; filename="{report_name}.zip"'
+            response.write(zip_buffer.read())
+
+            return response
+        except MissingTemplate:
+            messages.error(
+                self.request,
+                "You do not have a PowerPoint template selected and have not configured a default template",
+                extra_tags="alert-danger",
+            )
+        except ValueError as exception:
+            messages.error(
+                self.request,
+                f"Your selected template could not be loaded as a PowerPoint template: {exception}",
+                extra_tags="alert-danger",
+            )
+        except DocxPackageNotFoundError:
+            messages.error(
+                self.request,
+                "Your selected Word template could not be found on the server – try uploading it again",
+                extra_tags="alert-danger",
+            )
+        except PptxPackageNotFoundError:
+            messages.error(
+                self.request,
+                "Your selected PowerPoint template could not be found on the server – try uploading it again",
+                extra_tags="alert-danger",
+            )
+        except Exception as error:
+            messages.error(
+                self.request,
+                "Encountered an error generating the document: {}".format(error),
+                extra_tags="alert-danger",
+            )
+
+        return HttpResponseRedirect(
+            reverse("reporting:report_detail", kwargs={"pk": self.object.pk})
+        )
 
 
 # CBVs related to :model:`reporting.ReportFindingLink`
@@ -2107,9 +2234,9 @@ class EvidenceDetailView(LoginRequiredMixin, DetailView):
         file_content = None
         if os.path.isfile(self.object.document.path):
             if (
-                self.object.document.name.endswith(".txt")
-                or self.object.document.name.endswith(".log")
-                or self.object.document.name.endswith(".md")
+                self.object.document.name.lower().endswith(".txt")
+                or self.object.document.name.lower().endswith(".log")
+                or self.object.document.name.lower().endswith(".md")
             ):
                 filetype = "text"
                 file_content = []
@@ -2119,11 +2246,10 @@ class EvidenceDetailView(LoginRequiredMixin, DetailView):
                         file_content.append(line.decode())
                     except Exception:
                         file_content.append(line)
-
             elif (
-                self.object.document.name.endswith(".jpg")
-                or self.object.document.name.endswith(".png")
-                or self.object.document.name.endswith(".jpeg")
+                self.object.document.name.lower().endswith(".jpg")
+                or self.object.document.name.lower().endswith(".png")
+                or self.object.document.name.lower().endswith(".jpeg")
             ):
                 filetype = "image"
             else:
@@ -2412,9 +2538,7 @@ class FindingNoteUpdate(LoginRequiredMixin, UpdateView):
         messages.success(
             self.request, "Successfully updated the note", extra_tags="alert-success"
         )
-        return reverse(
-            "reporting:finding_detail", kwargs={"pk": self.object.finding.pk}
-        )
+        return reverse("reporting:finding_detail", kwargs={"pk": self.object.finding.pk})
 
 
 # CBVs related to :model:`reporting.LocalFindingNote`

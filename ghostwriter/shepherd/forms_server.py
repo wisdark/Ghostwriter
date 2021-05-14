@@ -1,6 +1,13 @@
 """This contains all server-related forms used by the Shepherd application."""
 
-# Django & Other 3rd Party Libraries
+# Django Imports
+from django import forms
+from django.core.exceptions import ValidationError
+from django.forms.models import BaseInlineFormSet, inlineformset_factory
+from django.urls import reverse
+from django.utils.translation import gettext_lazy as _
+
+# 3rd Party Libraries
 from crispy_forms.bootstrap import Alert, TabHolder
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import (
@@ -14,11 +21,6 @@ from crispy_forms.layout import (
     Row,
     Submit,
 )
-from django import forms
-from django.core.exceptions import ValidationError
-from django.forms.models import BaseInlineFormSet, inlineformset_factory
-from django.urls import reverse
-from django.utils.translation import gettext_lazy as _
 
 # Ghostwriter Libraries
 from ghostwriter.modules.custom_layout_object import CustomTab, Formset
@@ -107,7 +109,7 @@ class AuxServerAddressForm(forms.ModelForm):
             self.fields[field].widget.attrs["autocomplete"] = "chrome-off"
         self.fields["primary"].label = "Make Primary Address"
         self.fields["ip_address"].label = ""
-        self.fields["ip_address"].widget.attrs["placeholder"] = "172.10.10.236"
+        self.fields["ip_address"].widget.attrs["placeholder"] = "IP Address"
         self.fields["ip_address"].widget.attrs["autocomplete"] = "off"
         self.helper = FormHelper()
         # Disable the <form> tags because this will be inside of an instance of `ClientForm()`
@@ -200,11 +202,11 @@ class ServerForm(forms.ModelForm):
         super(ServerForm, self).__init__(*args, **kwargs)
         for field in self.fields:
             self.fields[field].widget.attrs["autocomplete"] = "off"
-        self.fields["ip_address"].widget.attrs["placeholder"] = "172.10.10.236"
-        self.fields["name"].widget.attrs["placeholder"] = "hostname"
+        self.fields["ip_address"].widget.attrs["placeholder"] = "IP Address"
+        self.fields["name"].widget.attrs["placeholder"] = "Hostname"
         self.fields["server_status"].empty_label = "-- Select Status --"
         self.fields["server_provider"].empty_label = "-- Select Provider --"
-        self.fields["note"].widget.attrs["placeholder"] = "This server is used for..."
+        self.fields["note"].widget.attrs["placeholder"] = ""
         self.helper = FormHelper()
         # Turn on <form> tags for this parent form
         self.helper.form_tag = True
@@ -282,7 +284,7 @@ class TransientServerForm(forms.ModelForm):
         super(TransientServerForm, self).__init__(*args, **kwargs)
         for field in self.fields:
             self.fields[field].widget.attrs["autocomplete"] = "off"
-        self.fields["ip_address"].widget.attrs["placeholder"] = "104.131.1.100"
+        self.fields["ip_address"].widget.attrs["placeholder"] = "IP Address"
         self.fields["name"].widget.attrs["placeholder"] = "Hostname"
         self.fields["activity_type"].empty_label = "-- Select Activity --"
         self.fields["server_role"].empty_label = "-- Select Role --"
@@ -294,7 +296,7 @@ class TransientServerForm(forms.ModelForm):
         self.helper.layout = Layout(
             HTML(
                 """
-                <strong><i class="fas fa-server"></i> Server Information</strong>
+                <h4 class="icon server-icon">Server Information</h4>
                 <hr>
                 """
             ),
@@ -308,7 +310,7 @@ class TransientServerForm(forms.ModelForm):
             "server_provider",
             HTML(
                 """
-                <strong><i class="far fa-comment-alt"></i> Additional Information</strong>
+                <h4 class="icon comment-icon">Additional Information</h4>
                 <hr>
                 """
             ),
@@ -375,7 +377,16 @@ class ServerCheckoutForm(forms.ModelForm):
     class Meta:
         model = ServerHistory
         fields = "__all__"
-        widgets = {"operator": forms.HiddenInput(), "server": forms.HiddenInput()}
+        widgets = {
+            "operator": forms.HiddenInput(),
+            "server": forms.HiddenInput(),
+            "start_date": forms.DateInput(
+                format=("%Y-%m-%d"),
+            ),
+            "end_date": forms.DateInput(
+                format=("%Y-%m-%d"),
+            ),
+        }
 
     def __init__(self, *args, **kwargs):
         super(ServerCheckoutForm, self).__init__(*args, **kwargs)
@@ -392,13 +403,9 @@ class ServerCheckoutForm(forms.ModelForm):
         self.fields["project"].empty_label = "-- Select a Client First --"
         self.fields["project"].label = ""
         self.fields["project"].queryset = Project.objects.none()
-        self.fields["start_date"].widget.attrs["placeholder"] = "mm/dd/yyyy"
         self.fields["start_date"].widget.input_type = "date"
-        self.fields["end_date"].widget.attrs["placeholder"] = "mm/dd/yyyy"
         self.fields["end_date"].widget.input_type = "date"
-        self.fields["note"].widget.attrs[
-            "placeholder"
-        ] = "This server will be used for C2 with ..."
+        self.fields["note"].widget.attrs["placeholder"] = ""
         self.fields["note"].label = ""
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -412,17 +419,11 @@ class ServerCheckoutForm(forms.ModelForm):
         self.helper.layout = Layout(
             HTML(
                 """
-                <strong><i class="far fa-building"></i> Client Information</strong>
+                <h4 class="icon project-icon">Project & Activity Information</h4>
                 <hr>
                 """
             ),
             "client",
-            HTML(
-                """
-                <strong><i class="fas fa-tasks"></i> Usage Information</strong>
-                <hr>
-                """
-            ),
             "project",
             Row(
                 Column("start_date", css_class="form-group col-md-6 mb-0"),
@@ -433,7 +434,7 @@ class ServerCheckoutForm(forms.ModelForm):
             "server_role",
             HTML(
                 """
-                <strong><i class="far fa-comment-alt"></i> Additional Information</strong>
+                <h4 class="icon comment-icon">Additional Information</h4>
                 <hr>
                 """
             ),
