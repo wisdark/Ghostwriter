@@ -1,9 +1,15 @@
 """This contains all of the database models used by the Rolodex application."""
 
+# Standard Libraries
+from datetime import time
+
 # Django Imports
 from django.conf import settings
 from django.db import models
 from django.urls import reverse
+
+# 3rd Party Libraries
+from timezone_field import TimeZoneField
 
 # Ghostwriter Libraries
 from ghostwriter.reporting.models import ReportFindingLink
@@ -39,6 +45,17 @@ class Client(models.Model):
         null=True,
         blank=True,
         help_text="Describe the client or provide some additional information",
+    )
+    timezone = TimeZoneField(
+        "Client Timezone",
+        default="America/Los_Angeles",
+        help_text="Primary timezone of the client",
+    )
+    address = models.TextField(
+        "Client Business Address",
+        null=True,
+        blank=True,
+        help_text="An address to be used for reports or shipping",
     )
 
     class Meta:
@@ -85,6 +102,11 @@ class ClientContact(models.Model):
         null=True,
         blank=True,
         help_text="Enter a phone number for this contact",
+    )
+    timezone = TimeZoneField(
+        "Timezone",
+        default="America/Los_Angeles",
+        help_text="The contact's timezone",
     )
     note = models.TextField(
         "Client Note",
@@ -177,6 +199,25 @@ class Project(models.Model):
         on_delete=models.PROTECT,
         null=False,
         help_text="Select a category for this project that best describes the work being performed",
+    )
+    timezone = TimeZoneField(
+        "Project Timezone",
+        default="America/Los_Angeles",
+        help_text="Timezone of the project / working hours",
+    )
+    start_time = models.TimeField(
+        "Start Time",
+        default=time(9, 00),
+        null=True,
+        blank=True,
+        help_text="Select the start time for each day",
+    )
+    end_time = models.TimeField(
+        "End Time",
+        default=time(17, 00),
+        null=True,
+        blank=True,
+        help_text="Select the end time for each day",
     )
 
     def count_findings(self):
@@ -421,13 +462,14 @@ class ProjectObjective(models.Model):
         completed_tasks = 0
         if self.complete:
             return 100.0
-        elif total_tasks > 0:
+
+        if total_tasks > 0:
             for task in self.projectsubtask_set.all():
                 if task.complete:
                     completed_tasks += 1
             return round(completed_tasks / total_tasks * 100, 1)
-        else:
-            return 0
+
+        return 0
 
 
 class ProjectSubTask(models.Model):
@@ -592,20 +634,14 @@ class ProjectScope(models.Model):
 
     def count_lines(self):
         """Returns the number of lines in the scope list."""
-        count = 0
-        for line in self.scope.splitlines():
-            count += 1
-        return count
+        return len(self.scope.splitlines())
 
     def count_lines_str(self):
         """Returns the number of lines in the scope list as a string."""
-        count = 0
-        for line in self.scope.splitlines():
-            count += 1
+        count = len(self.scope.splitlines())
         if count > 1:
             return f"{count} Lines"
-        else:
-            return f"{count} Line"
+        return f"{count} Line"
 
 
 class ProjectTarget(models.Model):

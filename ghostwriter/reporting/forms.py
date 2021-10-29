@@ -139,7 +139,7 @@ class ReportForm(forms.ModelForm):
         self.project_instance = project
         # Limit the list to just projects not marked as complete
         active_projects = Project.objects.filter(complete=False).order_by(
-            "start_date", "client", "project_type"
+            "-start_date", "client", "project_type"
         )
         if active_projects:
             self.fields["project"].empty_label = "-- Select an Active Project --"
@@ -605,7 +605,7 @@ class SelectReportTemplateForm(forms.ModelForm):
                 Column(
                     HTML(
                         """
-                        <p class="text-left m-0">Template for DOCX Documents</p>
+                        <p class="text-left mt-1">Template for DOCX</p>
                         """
                     ),
                     css_class="col-md-2",
@@ -635,7 +635,7 @@ class SelectReportTemplateForm(forms.ModelForm):
                 Column(
                     HTML(
                         """
-                        <p class="text-left m-0">Template for PPTX Documents</p>
+                        <p class="text-left mt-1">Template for PPTX</p>
                         """
                     ),
                     css_class="col-md-2",
