@@ -10,9 +10,9 @@ from django.contrib.messages import constants as messages
 # 3rd Party Libraries
 import environ
 
-__version__ = "2.2.2-rc2"
+__version__ = "2.2.3"
 VERSION = __version__
-RELEASE_DATE = "22 Sept 2021"
+RELEASE_DATE = "16 Feb 2022"
 
 ROOT_DIR = Path(__file__).resolve(strict=True).parent.parent.parent
 APPS_DIR = ROOT_DIR / "ghostwriter"
@@ -51,6 +51,8 @@ LOCALE_PATHS = [str(ROOT_DIR / "locale")]
 # https://docs.djangoproject.com/en/dev/ref/settings/#databases
 DATABASES = {"default": env.db("DATABASE_URL")}
 DATABASES["default"]["ATOMIC_REQUESTS"] = True
+# https://docs.djangoproject.com/en/stable/ref/settings/#std:setting-DEFAULT_AUTO_FIELD
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # URLS
 # ------------------------------------------------------------------------------
