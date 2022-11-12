@@ -34,7 +34,7 @@ class DomainReview:
     ``domain_queryset``
         Queryset for :model:`shepherd:Domain`
     ``sleep_time_override``
-        Number of seconds to sleep betwen VirusTotal API requests
+        Number of seconds to sleep between VirusTotal API requests
         (overrides global configuration)
     """
 
@@ -44,15 +44,26 @@ class DomainReview:
     # Categories we don't want to see
     # These are lowercase to avoid inconsistencies with how each service might return the categories
     blocklist = [
+        "adult/mature content",
+        "extreme",
+        "gambling",
+        "hacking",
+        "malicious outbound data/botnets",
+        "malicious sources",
+        "malicious sources/malnets",
+        "malware repository",
+        "nudity",
         "phishing",
-        "web ads/analytics",
-        "suspicious",
         "placeholders",
         "pornography",
-        "spam",
-        "gambling",
+        "potentially unwanted software",
         "scam/questionable/illegal",
-        "malicious sources/malnets",
+        "spam",
+        "spyware and malware",
+        "suspicious",
+        "violence/hate/racism",
+        "weapons",
+        "web ads/analytics"
     ]
 
     # Variables for web browsing
@@ -181,6 +192,14 @@ class DomainReview:
                     domain_categories = {}
                     lab_results[domain.id]["vt_results"] = vt_results["data"]
 
+                    # Check if the domain is tagged as DGA
+                    if "tags" in vt_results["data"]:
+                        if "dga" in vt_results["data"]["tags"]:
+                            burned = True
+                            burned_explanations.append(
+                                "Domain is tagged with `DGA` for domain generation algorithm, and likely flagged for malware."
+                            )
+
                     # Check if VT returned the ``categories`` key with a list
                     if "categories" in vt_results["data"]:
                         # Store the categories and check each one against the blocklist
@@ -196,9 +215,7 @@ class DomainReview:
                                 )
                                 burned = True
                                 burned_explanations.append(
-                                    "{source} has assigned the domain an undesirable category: {cat}".format(
-                                        source=source, cat=category
-                                    )
+                                    f"{source} has assigned the domain an undesirable category: {category}."
                                 )
 
                     # Check for any detections
@@ -207,7 +224,7 @@ class DomainReview:
                         if analysis_stats["malicious"] > 0:
                             burned = True
                             burned_explanations.append(
-                                "A VirusTotal scanner has flagged the domain as malicious"
+                                "A VirusTotal scanner has flagged the domain as malicious."
                             )
                             logger.warning(
                                 "A VirusTotal scanner has flagged the %s as malicious",
@@ -220,7 +237,7 @@ class DomainReview:
                         if votes["malicious"] > 0:
                             burned = True
                             burned_explanations.append(
-                                "There are {} VirusTotal community votes flagging the the domain as malicious".format(
+                                "There are {} VirusTotal community votes flagging the the domain as malicious.".format(
                                     votes["malicious"]
                                 )
                             )

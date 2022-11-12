@@ -137,7 +137,7 @@ class WhoisStatusModelTests(TestCase):
 
     def test_prop_count_status(self):
         status = WhoisStatusFactory(whois_status="Enabled")
-        domain = DomainFactory(whois_status=status)
+        DomainFactory(whois_status=status)
 
         try:
             count = status.count
@@ -222,10 +222,10 @@ class DomainModelTests(TestCase):
 
         try:
             age = domain.get_domain_age()
-            self.assertEqual(age, "360 days")
+            self.assertEqual(age, 360)
 
             age = expired_domain.get_domain_age()
-            self.assertEqual(age, "359 days")
+            self.assertEqual(age, 359)
         except Exception:
             self.fail("Domain model `get_domain_age` method failed unexpectedly!")
 

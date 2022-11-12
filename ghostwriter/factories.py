@@ -1,6 +1,6 @@
 # Standard Libraries
 import random
-from datetime import date, timedelta
+from datetime import date, timedelta, timezone
 
 # Django Imports
 from django.contrib.auth import get_user_model
@@ -33,6 +33,7 @@ class UserFactory(factory.django.DjangoModelFactory):
     phone = Faker("phone_number")
     timezone = random.choice(TIMEZONES)
     password = factory.PostGenerationMethodCall("set_password", "mysecret")
+    role = "user"
 
     @factory.post_generation
     def groups(self, create, extracted, **kwargs):
@@ -217,6 +218,8 @@ class FindingFactory(factory.django.DjangoModelFactory):
     title = factory.Sequence(lambda n: "Finding %s" % n)
     severity = factory.SubFactory(SeverityFactory)
     finding_type = factory.SubFactory(FindingTypeFactory)
+    cvss_score = factory.LazyFunction(lambda: round(random.uniform(0,10), 1))
+    cvss_vector = factory.Sequence(lambda n: "Vector %s" % n)
     description = Faker("paragraph")
     impact = Faker("paragraph")
     mitigation = Faker("paragraph")
@@ -301,6 +304,8 @@ class ReportFindingLinkFactory(factory.django.DjangoModelFactory):
     affected_entities = Faker("hostname")
     severity = factory.SubFactory(SeverityFactory)
     finding_type = factory.SubFactory(FindingTypeFactory)
+    cvss_score = factory.LazyFunction(lambda: round(random.uniform(0,10), 1))
+    cvss_vector = factory.Sequence(lambda n: "Vector %s" % n)
     report = factory.SubFactory(ReportFactory)
     assigned_to = factory.SubFactory(UserFactory)
     description = Faker("paragraph")
@@ -311,6 +316,7 @@ class ReportFindingLinkFactory(factory.django.DjangoModelFactory):
     network_detection_techniques = Faker("paragraph")
     references = Faker("paragraph")
     finding_guidance = Faker("paragraph")
+    added_as_blank = Faker("boolean")
 
 
 class EvidenceFactory(factory.django.DjangoModelFactory):
@@ -323,6 +329,26 @@ class EvidenceFactory(factory.django.DjangoModelFactory):
     description = Faker("sentence")
     finding = factory.SubFactory(ReportFindingLinkFactory)
     uploaded_by = factory.SubFactory(UserFactory)
+
+    class Params:
+        img = factory.Trait(
+            document=factory.django.FileField(
+                filename="evidence.png",
+                data=b"lorem ipsum"
+            )
+        )
+        txt = factory.Trait(
+            document=factory.django.FileField(
+                filename="evidence.txt",
+                data=b"lorem ipsum"
+            )
+        )
+        unknown = factory.Trait(
+            document=factory.django.FileField(
+                filename="evidence.tar",
+                data=b"lorem ipsum"
+            )
+        )
 
 
 class ArchiveFactory(factory.django.DjangoModelFactory):
@@ -367,6 +393,24 @@ class ProjectNoteFactory(factory.django.DjangoModelFactory):
     note = Faker("paragraph")
     project = factory.SubFactory(ProjectFactory)
     operator = factory.SubFactory(UserFactory)
+
+
+class ClientInviteFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = "rolodex.ClientInvite"
+
+    comment = Faker("paragraph")
+    client = factory.SubFactory(ClientFactory)
+    user = factory.SubFactory(UserFactory)
+
+
+class ProjectInviteFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = "rolodex.ProjectInvite"
+
+    comment = Faker("paragraph")
+    project = factory.SubFactory(ProjectFactory)
+    user = factory.SubFactory(UserFactory)
 
 
 # Oplog Factories
@@ -432,6 +476,7 @@ class ActivityTypeFactory(factory.django.DjangoModelFactory):
 class DomainFactory(factory.django.DjangoModelFactory):
     class Meta:
         model = "shepherd.Domain"
+        django_get_or_create = ("name",)
 
     name = Faker("domain_name")
     registrar = Faker("company")
@@ -555,6 +600,7 @@ class DomainNoteFactory(factory.django.DjangoModelFactory):
 
     note = Faker("paragraph")
     domain = factory.SubFactory(DomainFactory)
+    operator = factory.SubFactory(UserFactory)
 
 
 class ServerNoteFactory(factory.django.DjangoModelFactory):
@@ -563,6 +609,7 @@ class ServerNoteFactory(factory.django.DjangoModelFactory):
 
     note = Faker("paragraph")
     server = factory.SubFactory(StaticServerFactory)
+    operator = factory.SubFactory(UserFactory)
 
 
 class NamecheapConfigurationFactory(factory.django.DjangoModelFactory):
@@ -588,6 +635,7 @@ class ReportConfigurationFactory(factory.django.DjangoModelFactory):
     label_figure = Faker("word")
     prefix_table = Faker("word")
     label_table = Faker("word")
+    report_filename = "{Y-m-d}_{His} {company} - {client} {assessment_type} Report"
     default_docx_template = factory.SubFactory(ReportDocxTemplateFactory)
     default_pptx_template = factory.SubFactory(ReportPptxTemplateFactory)
 
@@ -633,6 +681,45 @@ class VirusTotalConfigurationFactory(factory.django.DjangoModelFactory):
     sleep_time = 20
 
 
+class GeneralConfigurationFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = "commandcenter.GeneralConfiguration"
+
+    default_timezone = random.choice(TIMEZONES)
+
+
+class DeconflictionStatusFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = "rolodex.DeconflictionStatus"
+
+    status = factory.Sequence(lambda n: "Status %s" % n)
+    weight = factory.Sequence(lambda n: n)
+
+
+class DeconflictionFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = "rolodex.Deconfliction"
+
+    report_timestamp = Faker("date_time", tzinfo=pytz.UTC)
+    alert_timestamp = Faker("date_time", tzinfo=pytz.UTC)
+    response_timestamp = Faker("date_time", tzinfo=pytz.UTC)
+    title = Faker("sentence")
+    description = Faker("paragraph")
+    alert_source = Faker("word")
+    status = factory.SubFactory(DeconflictionStatusFactory)
+    project = factory.SubFactory(ProjectFactory)
+
+
+class WhiteCardFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = "rolodex.WhiteCard"
+
+    issued = Faker("date_time", tzinfo=pytz.UTC)
+    title = Faker("user_name")
+    description = Faker("paragraph")
+    project = factory.SubFactory(ProjectFactory)
+
+
 def GenerateMockProject(
     num_of_contacts=3,
     num_of_assignments=3,
@@ -643,6 +730,8 @@ def GenerateMockProject(
     num_of_subtasks=5,
     num_of_domains=5,
     num_of_servers=5,
+    num_of_deconflictions=3,
+    num_of_whitecards=3,
 ):
     # Generate a random client and project
     client = ClientFactory(name="SpecterOps, Inc.")
@@ -712,6 +801,23 @@ def GenerateMockProject(
     domains = HistoryFactory.create_batch(num_of_domains, project=project)
     servers = ServerHistoryFactory.create_batch(num_of_servers, project=project)
     cloud = TransientServerFactory.create_batch(num_of_servers, project=project)
+
+    # Generate deconflictions
+    deconfliction_status = []
+    deconfliction_status.append(DeconflictionStatusFactory(status="Undetermined", weight=0))
+    deconfliction_status.append(DeconflictionStatusFactory(status="Confirmed", weight=1))
+    deconfliction_status.append(DeconflictionStatusFactory(status="Unrelated", weight=2))
+    DeconflictionFactory.create_batch(
+        num_of_deconflictions,
+        project=project,
+        status=random.choice(deconfliction_status),
+    )
+
+    # Generate white cards
+    WhiteCardFactory.create_batch(
+        num_of_whitecards,
+        project=project,
+    )
 
     for index, domain in enumerate(domains):
         if index % 2 == 0:

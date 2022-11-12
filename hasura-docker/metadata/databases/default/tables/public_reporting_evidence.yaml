@@ -1,0 +1,160 @@
+table:
+  name: reporting_evidence
+  schema: public
+configuration:
+  column_config:
+    finding_id:
+      custom_name: findingId
+    friendly_name:
+      custom_name: friendlyName
+    upload_date:
+      custom_name: uploadDate
+    uploaded_by_id:
+      custom_name: uploadedById
+  custom_column_names:
+    finding_id: findingId
+    friendly_name: friendlyName
+    upload_date: uploadDate
+    uploaded_by_id: uploadedById
+  custom_name: evidence
+  custom_root_fields: {}
+object_relationships:
+  - name: finding
+    using:
+      foreign_key_constraint_on: finding_id
+  - name: user
+    using:
+      foreign_key_constraint_on: uploaded_by_id
+select_permissions:
+  - role: manager
+    permission:
+      columns:
+        - caption
+        - description
+        - document
+        - finding_id
+        - friendly_name
+        - id
+        - upload_date
+        - uploaded_by_id
+      filter: {}
+  - role: restricted
+    permission:
+      columns: '*'
+      filter:
+        finding:
+          report:
+            project:
+              _or:
+                - invites:
+                    user_id:
+                      _eq: X-Hasura-User-Id
+                - assignments:
+                    operator_id:
+                      _eq: X-Hasura-User-Id
+                - client:
+                    invites:
+                      user_id:
+                        _eq: X-Hasura-User-Id
+  - role: user
+    permission:
+      columns: '*'
+      filter:
+        finding:
+          report:
+            project:
+              _or:
+                - invites:
+                    user_id:
+                      _eq: X-Hasura-User-Id
+                - assignments:
+                    operator_id:
+                      _eq: X-Hasura-User-Id
+                - client:
+                    invites:
+                      user_id:
+                        _eq: X-Hasura-User-Id
+update_permissions:
+  - role: manager
+    permission:
+      columns:
+        - caption
+        - description
+        - finding_id
+        - friendly_name
+      filter: {}
+      check: {}
+  - role: restricted
+    permission:
+      columns:
+        - caption
+        - description
+        - finding_id
+        - friendly_name
+      filter:
+        finding:
+          report:
+            project:
+              _or:
+                - invites:
+                    user_id:
+                      _eq: X-Hasura-User-Id
+                - assignments:
+                    operator_id:
+                      _eq: X-Hasura-User-Id
+                - client:
+                    invites:
+                      user_id:
+                        _eq: X-Hasura-User-Id
+      check:
+        finding:
+          report:
+            project:
+              _or:
+                - invites:
+                    user_id:
+                      _eq: X-Hasura-User-Id
+                - assignments:
+                    operator_id:
+                      _eq: X-Hasura-User-Id
+                - client:
+                    invites:
+                      user_id:
+                        _eq: X-Hasura-User-Id
+  - role: user
+    permission:
+      columns:
+        - caption
+        - description
+        - finding_id
+        - friendly_name
+      filter:
+        finding:
+          report:
+            project:
+              _or:
+                - invites:
+                    user_id:
+                      _eq: X-Hasura-User-Id
+                - assignments:
+                    operator_id:
+                      _eq: X-Hasura-User-Id
+                - client:
+                    invites:
+                      user_id:
+                        _eq: X-Hasura-User-Id
+      check:
+        finding:
+          report:
+            project:
+              _or:
+                - invites:
+                    user_id:
+                      _eq: X-Hasura-User-Id
+                - assignments:
+                    operator_id:
+                      _eq: X-Hasura-User-Id
+                - client:
+                    invites:
+                      user_id:
+                        _eq: X-Hasura-User-Id

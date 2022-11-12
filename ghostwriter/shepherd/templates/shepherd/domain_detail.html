@@ -1,6 +1,6 @@
 {% extends "base_generic.html" %}
 
-{% load bleach_tags humanize %}
+{% load bleach_tags humanize custom_tags %}
 
 {% block pagetitle %}{{ domain.name }} Details{% endblock %}
 
@@ -26,7 +26,7 @@
             {% if domain.is_expired %}
                 <a class="dropdown-item icon skull-icon" href="#">Domain Expired</a>
             {% else %}
-                {% if domain.domain_status.domain_status == "Available" %}
+                {% if domain.domain_status.domain_status == "Available" or domain.domain_status.domain_status == "Burned" %}
                     <a class="dropdown-item icon checkout-icon" href="{% url 'shepherd:checkout' domain.id %}">Checkout Domain</a>
                 {% else %}
                     <a class="dropdown-item icon block-icon" href="#">Domain Unavailable</a>
@@ -42,34 +42,37 @@
     <div class="container">
         <h2>{{ domain.name }}</h2>
     </div>
+    <hr />
 
     <div>
-        <!-- Description Section -->
-        <h3>Domain Description</h3>
-        <hr>
-        {% if domain.note %}
-            <p>{{ domain.note|bleach }}</p>
-        {% else %}
-            <p>No additional information provided for this domain.</p>
-        {% endif %}
-
-        {% if domain.is_expired %}
-            <div class="alert alert-danger" role="alert">
-                Domain is <strong>Expired</strong>, so this data is now read-only.
-            </div>
-        {% endif %}
-
-        <p class="form-spacer"></p>
-
         <!-- Navigation Tabs -->
         {% comment %} Load tabs via AJAX so badges update with delete actions {% endcomment %}
         <ul id="tab-bar" class="nav nav-tabs nav-justified" js-update-tabs-url="{% url 'shepherd:ajax_update_domain_badges' domain.id %}">
             {% include "snippets/domain_nav_tabs.html" %}
         </ul>
 
+        <!-- General Tab -->
         <div class="tab-content">
             <div id="details" class="tab-pane in active">
-                <!-- General Domain Section -->
+                <h4>Domain Details</h4>
+                <hr>
+
+                {% if domain.is_expired %}
+                    <div class="alert alert-danger" role="alert">
+                        Domain is <strong>Expired</strong>, so this data is now read-only.
+                    </div>
+                {% endif %}
+
+                <div id="domainDescription" class="d-flex justify-content-center description-block">
+                    <div>
+                        {% if domain.note %}
+                            {{ domain.note|strip_empty_tags|bleach }}
+                        {% else %}
+                            <p>No additional information provided for this domain.</p>
+                        {% endif %}
+                    </div>
+                </div>
+
                 <table class="table">
                     <tr>
                         <th>Registrar</th>
@@ -79,7 +82,7 @@
                         <th>Domain Age</th>
                     </tr>
                     <tr>
-                        <td>{{ domain.registrar }}</td>
+                        <td>{% if domain.registrar %}{{ domain.registrar }}{% else %}Unavailable{% endif %}</td>
                         <td>{{ domain.creation }}</td>
                         {% if domain.is_expired %}
                             <td class="high">{{ domain.expiration }}</td>
@@ -96,11 +99,14 @@
                 </table>
             </div>
 
-            <!-- DNS Records Section -->
+            <!-- DNS Records Tab -->
             <div id="dns" class="tab-pane">
+                <h4>DNS Records</h4>
+                <hr />
+
                 {% if not domain.is_expired %}
                     <p>
-                        <a href="javascript:void(0)" class="icon redo-icon clickable-link js-domain-update btn btn-primary" domain-update-csrftoken="{{ csrf_token }}" domain-update-url="{% url 'shepherd:ajax_update_dns_single' domain.id %}" domain-update-id="{{ domain.id }}">Refresh DNS Records</a>
+                        <a href="javascript:void(0)" class="icon redo-icon clickable-link js-domain-update btn btn-primary col-3" domain-update-csrftoken="{{ csrf_token }}" domain-update-url="{% url 'shepherd:ajax_update_dns_single' domain.id %}" domain-update-id="{{ domain.id }}">Refresh DNS Records</a>
                     </p>
                 {% endif %}
 
@@ -145,11 +151,14 @@
                 {% endif %}
             </div>
 
-            <!-- Domain Health Section -->
+            <!-- Domain Health Tab -->
             <div id="health" class="tab-pane">
+                <h4>Domain Health</h4>
+                <hr />
+
                 {% if not domain.is_expired %}
                     <p>
-                        <a href="javascript:void(0)" class="icon redo-icon clickable-link js-domain-update btn btn-primary" domain-update-csrftoken="{{ csrf_token }}" domain-update-url="{% url 'shepherd:ajax_update_cat_single' domain.id %}" domain-update-id="{{ domain.id }}">Refresh Categorization</a>
+                        <a href="javascript:void(0)" class="icon redo-icon clickable-link js-domain-update btn btn-primary col-3" domain-update-csrftoken="{{ csrf_token }}" domain-update-url="{% url 'shepherd:ajax_update_cat_single' domain.id %}" domain-update-id="{{ domain.id }}">Refresh Categorization</a>
                     </p>
                 {% endif %}
 
@@ -202,7 +211,7 @@
                     </tr>
                 </table>
 
-                <!-- Categories Section -->
+                <!-- Health Tab -->
                 <p>The following third-parties have categorized this domain:</p>
                 <table class="table">
                     <tr>
@@ -214,7 +223,7 @@
                             {% for source, cat in domain.categorization.items %}
                                 <tr>
                                     <td>{{ source }}</td>
-                                    <td>{{ cat }}</td>
+                                    <td>{{ cat|title }}</td>
                                 </tr>
                             {% endfor %}
                         {% else %}
@@ -224,8 +233,11 @@
                 </table>
             </div>
 
-            <!-- Project History Tab -->
+            <!-- History Tab -->
             <div id="history" class="tab-pane">
+                <h4>Domain History</h4>
+                <hr />
+
                 {% if domain.history_set.all %}
                     <table id="project-table" class="tablesorter table table-striped">
                         <thead>
@@ -240,12 +252,12 @@
                         </thead>
                         {% for project in domain.history_set.all %}
                             <tr>
-                                <td><a class="clickable" href="{% url 'rolodex:project_detail' project.project.id %}">{{ project.client }}</i></a></td>
-                                <td>{{ project.activity_type }}</td>
-                                <td>{{ project.project.project_type }}</td>
-                                <td>{{ project.start_date|date:"d M Y" }} – {{ project.end_date|date:"d M Y" }}</td>
-                                <td class="table-note">{{ project.note|bleach}}</td>
-                                <td>
+                                <td class="align-middle"><a class="clickable" href="{% url 'rolodex:project_detail' project.project.id %}">{{ project.client }}</i></a></td>
+                                <td class="align-middle">{{ project.activity_type }}</td>
+                                <td class="align-middle">{{ project.project.project_type }}</td>
+                                <td class="align-middle">{{ project.start_date|date:"d M Y" }} – {{ project.end_date|date:"d M Y" }}</td>
+                                <td class="table-note align-middle">{{ project.note|bleach|truncatewords:35 }}</td>
+                                <td class="align-middle">
                                     <div class="dropdown dropleft">
                                         <button id="history-dropdown-btn_{{ project.id }}" class="dropdown-menu-btn-table" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false"></button>
                                         <div class="dropdown-menu" aria-labelledby="history-dropdown-btn_{{ project.id }}">
@@ -264,28 +276,33 @@
 
             <!-- Notes Tab -->
             <div id="notes" class="tab-pane">
+                <h4>Domain Notes</h4>
+                <hr />
+
                 <p>
-                    <a class="icon add-icon btn btn-primary" href="{% url 'shepherd:domain_note_add' domain.id %}">Add a Note</a>
+                    <a class="icon add-icon btn btn-primary col-3" href="{% url 'shepherd:domain_note_add' domain.id %}">Add a Note</a>
                 </p>
                 {% if domain.domainnote_set.all %}
                     {% for note in domain.domainnote_set.all reversed %}
                         <div id="note-container-{{ note.id }}">
-                            <p>{{ note.timestamp }}</p>
                             <div class="container note-container {% if forloop.counter|divisibleby:2 %}darker{% endif %}">
-                                <img class="avatar_note right" src="{{ note.operator.userprofile.avatar_url }}" alt="Avatar">
-                                {% if request.user == note.operator or request.user.is_staff %}
-                                    <div class="dropdown dropleft right">
-                                        <button id="note-dropdown-btn-{{ note.id }}" class="dropdown-menu-btn-table" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false"></button>
-                                        <div id="note-dropdown-menu-{{ note.id }}" class="dropdown-content">
-                                            <a class="icon edit-icon" href="{% url 'shepherd:domain_note_edit' note.id %}">Edit</a>
-                                            <a id="note-delete-button-{{ note.id }}" class="js-confirm-delete icon trash-icon" data-toggle="modal" data-target="#confirm-delete-modal" href="javascript:void(0);" delete-target-csrftoken="{{ csrf_token }}" delete-target-url="{% url 'shepherd:ajax_delete_domain_note' note.id%}" delete-target-id="{{ note.id }}" delete-target-type="note">Delete</a>
-                                        </div>
-                                    </div>
-                                {% endif %}
-                                {{ note.note|bleach }}
-                                <span class="time-right">{{ note.operator.username }}</span>
+                                <div class="float-left col-10 col-md-10 col-sm-8">
+                                    {{ note.note|bleach }}
+                                </div>
+
+                                <div class="float-right col-2 col-md-2 col-sm-4">
+                                    <div>{% if note.operator %}<a class="note-link" href="{% url 'users:user_detail' note.operator.username %}">{{ note.operator.username }}</a>{% else %}<span class="note-link">Deleted</span>{% endif %}</div>
+                                    <div><p class="note-time">{{ note.timestamp }}</p></div>
+                                </div>
                             </div>
                         </div>
+
+                        {% if request.user == note.operator or request.user.is_staff %}
+                            <div class="pb-3">
+                                <a class="note-link" href="{% url 'shepherd:domain_note_edit' note.id %}">Edit</a> |
+                                <a id="note-delete-button-{{ note.id }}" class="js-confirm-delete note-link" data-toggle="modal" data-target="#confirm-delete-modal" href="javascript:void(0);" delete-target-csrftoken="{{ csrf_token }}" delete-target-url="{% url 'shepherd:ajax_delete_domain_note' note.id%}" delete-target-id="{{ note.id }}" delete-target-type="note">Delete</a>
+                            </div>
+                        {% endif %}
                     {% endfor %}
                 {% else %}
                     <p>No notes for this domain.</p>

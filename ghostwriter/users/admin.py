@@ -24,6 +24,7 @@ class UserAdmin(auth_admin.UserAdmin):
     list_display = (
         "name",
         "username",
+        "role",
         "email",
         "is_active",
         "is_staff",
@@ -31,6 +32,7 @@ class UserAdmin(auth_admin.UserAdmin):
         "last_login",
     )
     list_filter = (
+        "role",
         "is_active",
         "is_staff",
         "is_superuser",
@@ -43,6 +45,7 @@ class UserAdmin(auth_admin.UserAdmin):
             _("User Permissions"),
             {
                 "fields": (
+                    "role",
                     "is_active",
                     "is_staff",
                     "is_superuser",

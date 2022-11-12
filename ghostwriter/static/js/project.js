@@ -5,7 +5,7 @@ function displayToastTop({
   type,
   string,
   title = '',
-  delay = 4,
+  delay = 3,
   escapeHTML = true,
   context = null,
 }) {
@@ -15,16 +15,11 @@ function displayToastTop({
     }
   }
   delay = delay * 1000;
-  if (type === 'error' && delay === 4000) {
-    delay = 0;
-  }
-  if (type === 'info' && delay === 4000) {
-    delay = 0;
-  }
   toastr.options.timeOut = delay.toString();
   toastr.options.extendedTimeOut = delay.toString();
   toastr.options.escapeHtml = escapeHTML;
   toastr.options.progressBar = true;
+  toastr.options.closeButton = true;
   let msg;
   if (type === 'success') {
     if (title == '') {
@@ -89,4 +84,22 @@ function generateDownloadName(name) {
     }
     filename = '' + year + month + day + '_' + hour + minutes + sec + '_' + name
     return filename
+}
+
+function update_badges() {
+  // Get the update URL from the ``nav-tabs`` element
+  var navTabs = $('.nav-tabs');
+  var update_url = navTabs.attr('js-update-tabs-url');
+  if (update_url != null) {
+      console.log("Updating badges...");
+      // Save the ``id`` of the current tab with the ``active`` class
+      var activeTabId = $('ul#tab-bar a.active').attr('id');
+      activeTabId = '#' + activeTabId;
+      // Refresh the HTML from the update URL
+      navTabs.html('').load(update_url, function() {
+          // Set the previously active tab back to ``active``
+          var targetTab = $(activeTabId);
+          targetTab.tab('show');
+      });
+  }
 }

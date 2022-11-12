@@ -2,8 +2,12 @@
 
 # Django Imports
 from django import template
+from django.conf import settings
 from django.contrib.auth.models import Group
 from django.db.models import Q
+
+# 3rd Party Libraries
+from bs4 import BeautifulSoup
 
 # Ghostwriter Libraries
 from ghostwriter.reporting.models import Report, ReportFindingLink
@@ -74,3 +78,24 @@ def get_reports(request):
             active_reports.append(report)
 
     return active_reports
+
+
+@register.simple_tag
+def settings_value(name):
+    """Return the specified setting value."""
+    return getattr(settings, name, "")
+
+
+@register.filter(name="count_incomplete_objectives")
+def count_incomplete_objectives(queryset):
+    """Return the number of incomplete objectives"""
+    return queryset.filter(complete=False).count()
+
+@register.filter(name="strip_empty_tags")
+def strip_empty_tags(content):
+    """Strip empty tags from HTML content."""
+    soup = BeautifulSoup(content , "lxml")
+    for x in soup.find_all():
+        if len(x.get_text(strip=True)) == 0:
+            x.extract()
+    return soup.prettify()

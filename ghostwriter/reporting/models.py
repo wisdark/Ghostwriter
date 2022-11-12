@@ -27,7 +27,7 @@ class Severity(models.Model):
         "Severity",
         max_length=255,
         unique=True,
-        help_text="Name for this severity rating (e.g. High, Low)",
+        help_text="Name for this severity rating (e.g., High, Low)",
     )
     weight = models.IntegerField(
         "Severity Weight",
@@ -173,9 +173,21 @@ class Finding(models.Model):
         null=True,
         help_text="Select a finding category that fits",
     )
+    cvss_score = models.FloatField(
+        "CVSS Score v3.0",
+        blank=True,
+        null=True,
+        help_text="Set the CVSS score for this finding"
+    )
+    cvss_vector = models.CharField(
+        "CVSS Vector v3.0",
+        blank=True,
+        max_length=54,
+        help_text="Set the CVSS vector for this finding"
+    )
 
     class Meta:
-        ordering = ["severity", "finding_type", "title"]
+        ordering = ["severity", "-cvss_score", "finding_type", "title"]
         verbose_name = "Finding"
         verbose_name_plural = "Findings"
 
@@ -301,7 +313,7 @@ class ReportTemplate(models.Model):
                 )
             except Exception:  # pragma: no cover
                 logger.exception(
-                    "Encountered an exceptio while trying to decode this as JSON: %s",
+                    "Encountered an exception while trying to decode this as JSON: %s",
                     self.lint_result,
                 )
         return result_code
@@ -448,6 +460,11 @@ class ReportFindingLink(models.Model):
         default=False,
         help_text="Mark the finding as ready for a QA review",
     )
+    added_as_blank = models.BooleanField(
+        "Added as Blank",
+        default=False,
+        help_text="Identify a finding that was created for this report instead of copied from the library",
+    )
     # Foreign Keys
     severity = models.ForeignKey(
         "Severity",
@@ -468,6 +485,18 @@ class ReportFindingLink(models.Model):
         null=True,
         blank=True,
         help_text="Assign the task of editing this finding to a specific operator - defaults to the operator that added it to the report",
+    )
+    cvss_score = models.FloatField(
+        "CVSS Score v3.0",
+        blank=True,
+        null=True,
+        help_text="Set the CVSS score for this finding"
+    )
+    cvss_vector = models.CharField(
+        "CVSS Vector v3.0",
+        blank=True,
+        max_length=54,
+        help_text="Set the CVSS vector for this finding"
     )
 
     class Meta:

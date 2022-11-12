@@ -20,6 +20,7 @@ from django_q.models import Task
 from django_q.tasks import async_task
 
 # Ghostwriter Libraries
+from ghostwriter.modules.health_utils import DjangoHealthChecks
 from ghostwriter.reporting.models import ReportFindingLink
 from ghostwriter.rolodex.models import ProjectAssignment
 
@@ -39,7 +40,7 @@ def update_session(request):
     """
     Update the requesting user's session variable based on ``session_data`` in POST.
     """
-    if request.method=="POST":
+    if request.method == "POST":
         req_data = request.POST.get("session_data", None)
         if req_data:
             if req_data == "sidebar":
@@ -53,7 +54,6 @@ def update_session(request):
             "result": "success",
             "message": "Session updated",
         }
-        logger.info("Session updated for user %s", request.session["_auth_user_id"])
         return JsonResponse(data)
 
     return HttpResponseNotAllowed(["POST"])
@@ -67,8 +67,7 @@ def protected_serve(request, path, document_root=None, show_indexes=False):
     return serve(request, path, document_root, show_indexes)
 
 
-@login_required
-def dashboard(request):
+class Dashboard(LoginRequiredMixin, View):
     """
     Display the home page.
 
@@ -82,39 +81,54 @@ def dashboard(request):
         Five most recent :model:`django_q.Task` entries
     ``user_tasks``
         Incomplete :model:`reporting.ReportFindingLink` for current :model:`users.User`
+    ``system_health``
+        Current system health based on :func:`ghostwriter.modules.health_utils.DjangoHealthChecks`
 
     **Template**
 
     :template:`index.html`
     """
-    # Get the most recent :model:`django_q.Task` entries
-    recent_tasks = Task.objects.all()[:5]
-    # Get incomplete :model:`reporting.ReportFindingLink` for current :model:`users.User`
-    user_tasks = (
-        ReportFindingLink.objects.select_related("report", "report__project")
-        .filter(
-            Q(assigned_to=request.user) & Q(report__complete=False) & Q(complete=False)
-        )
-        .order_by("report__project__end_date")[:10]
-    )
-    # Get active :model:`reporting.ProjectAssignment` for current :model:`users.User`
-    user_projects = ProjectAssignment.objects.select_related(
-        "project", "project__client", "role"
-    ).filter(operator=request.user)
-    # Get future :model:`reporting.ProjectAssignment` for current :model:`users.User`
-    active_project = ProjectAssignment.objects.select_related(
-        "project", "project__client", "role"
-    ).filter(Q(operator=request.user) & Q(project__complete=False))
-    # Assemble the context dictionary to pass to the dashboard
-    context = {
-        "user_projects": user_projects,
-        "active_projects": active_project,
-        "recent_tasks": recent_tasks,
-        "user_tasks": user_tasks,
-    }
-    # Render the HTML template index.html with the data in the context variable
-    return render(request, "index.html", context=context)
 
+    def get(self, request, *args, **kwargs):
+        # Get the most recent :model:`django_q.Task` entries
+        recent_tasks = Task.objects.all()[:5]
+        # Get incomplete :model:`reporting.ReportFindingLink` for current :model:`users.User`
+        user_tasks = (
+            ReportFindingLink.objects.select_related("report", "report__project")
+            .filter(
+                Q(assigned_to=request.user) & Q(report__complete=False) & Q(complete=False)
+            )
+            .order_by("report__project__end_date")[:10]
+        )
+        # Get active :model:`reporting.ProjectAssignment` for current :model:`users.User`
+        user_projects = ProjectAssignment.objects.select_related(
+            "project", "project__client", "role"
+        ).filter(operator=request.user)
+        # Get future :model:`reporting.ProjectAssignment` for current :model:`users.User`
+        active_project = ProjectAssignment.objects.select_related(
+            "project", "project__client", "role"
+        ).filter(Q(operator=request.user) & Q(project__complete=False))
+        # Get system status
+        system_health = "OK"
+        try:
+            healthcheck = DjangoHealthChecks()
+            db_status = healthcheck.get_database_status()
+            cache_status = healthcheck.get_cache_status()
+            if not db_status["default"] or not cache_status["default"]:
+                system_health = "WARNING"
+        except Exception:
+            system_health = "ERROR"
+
+        # Assemble the context dictionary to pass to the dashboard
+        context = {
+            "user_projects": user_projects,
+            "active_projects": active_project,
+            "recent_tasks": recent_tasks,
+            "user_tasks": user_tasks,
+            "system_health": system_health,
+        }
+        # Render the HTML template index.html with the data in the context variable
+        return render(request, "index.html", context=context)
 
 class Management(LoginRequiredMixin, UserPassesTestMixin, View):
     """
@@ -168,7 +182,7 @@ class TestAWSConnection(LoginRequiredMixin, UserPassesTestMixin, View):
                 group="AWS Test",
             )
             message = "AWS access key test has been successfully queued"
-        except Exception:
+        except Exception:  # pragma: no cover
             result = "error"
             message = "AWS access key test could not be queued"
 
@@ -203,7 +217,7 @@ class TestDOConnection(LoginRequiredMixin, UserPassesTestMixin, View):
                 group="Digital Ocean Test",
             )
             message = "Digital Ocean API key test has been successfully queued"
-        except Exception:
+        except Exception:  # pragma: no cover
             result = "error"
             message = "Digital Ocean API key test could not be queued"
 
@@ -238,7 +252,7 @@ class TestNamecheapConnection(LoginRequiredMixin, UserPassesTestMixin, View):
                 group="Namecheap Test",
             )
             message = "Namecheap API test has been successfully queued"
-        except Exception:
+        except Exception:  # pragma: no cover
             result = "error"
             message = "Namecheap API test could not be queued"
 
@@ -273,7 +287,7 @@ class TestSlackConnection(LoginRequiredMixin, UserPassesTestMixin, View):
                 group="Slack Test",
             )
             message = "Slack Webhook test has been successfully queued"
-        except Exception:
+        except Exception:  # pragma: no cover
             result = "error"
             message = "Slack Webhook test could not be queued"
 
@@ -308,7 +322,7 @@ class TestVirusTotalConnection(LoginRequiredMixin, UserPassesTestMixin, View):
                 group="Slack Test",
             )
             message = "VirusTotal API test has been successfully queued"
-        except Exception:
+        except Exception:  # pragma: no cover
             result = "error"
             message = "VirusTotal API test could not be queued"
 

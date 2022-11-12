@@ -9,10 +9,10 @@ import logging
 from django import forms
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.db import transaction
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse, reverse_lazy
 from django.utils.translation import gettext_lazy as _
@@ -28,17 +28,20 @@ from ghostwriter.rolodex.forms_client import (
     ClientNoteForm,
 )
 from ghostwriter.rolodex.forms_project import (
+    DeconflictionForm,
     ProjectAssignmentFormSet,
     ProjectForm,
     ProjectNoteForm,
     ProjectObjectiveFormSet,
     ProjectScopeFormSet,
     ProjectTargetFormSet,
+    WhiteCardFormSet,
 )
 from ghostwriter.rolodex.models import (
     Client,
     ClientContact,
     ClientNote,
+    Deconfliction,
     ObjectivePriority,
     ObjectiveStatus,
     Project,
@@ -108,24 +111,24 @@ def roll_codename(request):
             new_codename = codenames.codename(uppercase=True)
             try:
                 Project.objects.filter(codename__iequal=new_codename)
-                codename_verified = False
+                codename_verified = False  # pragma: no cover
             except Exception:
                 codename_verified = True
             try:
                 Client.objects.filter(codename__iequal=new_codename)
-                codename_verified = False
+                codename_verified = False  # pragma: no cover
             except Exception:
                 codename_verified = True
         data = {
             "result": "success",
-            "message": "Codename successfuly generated",
+            "message": "Codename successfully generated",
             "codename": new_codename,
         }
         logger.info(
             "Generated new codename at request of %s",
             request.user,
         )
-    except Exception as exception: # pragma: no cover
+    except Exception as exception:  # pragma: no cover
         template = "An exception of type {0} occurred. Arguments:\n{1!r}"
         log_message = template.format(type(exception).__name__, exception.args)
         logger.error(log_message)
@@ -237,7 +240,7 @@ class ProjectObjectiveStatusUpdate(LoginRequiredMixin, SingleObjectMixin, View):
                 new_status,
                 self.request.user,
             )
-        except Exception as exception: # pragma: no cover
+        except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             log_message = template.format(type(exception).__name__, exception.args)
             logger.error(log_message)
@@ -279,7 +282,7 @@ class ProjectStatusToggle(LoginRequiredMixin, SingleObjectMixin, View):
                 self.object.id,
                 self.request.user,
             )
-        except Exception as exception: # pragma: no cover
+        except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             log_message = template.format(type(exception).__name__, exception.args)
             logger.error(log_message)
@@ -330,12 +333,20 @@ class ProjectAssignmentDelete(LoginRequiredMixin, SingleObjectMixin, View):
         return JsonResponse(data)
 
 
-class ProjectNoteDelete(LoginRequiredMixin, SingleObjectMixin, View):
+class ProjectNoteDelete(LoginRequiredMixin, SingleObjectMixin, UserPassesTestMixin, View):
     """
     Delete an individual :model:`rolodex.ProjectNote`.
     """
 
     model = ProjectNote
+
+    def test_func(self):
+        self.object = self.get_object()
+        return self.object.operator.id == self.request.user.id
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that")
+        return redirect("home:dashboard")
 
     def post(self, *args, **kwargs):
         self.object = self.get_object()
@@ -351,12 +362,20 @@ class ProjectNoteDelete(LoginRequiredMixin, SingleObjectMixin, View):
         return JsonResponse(data)
 
 
-class ClientNoteDelete(LoginRequiredMixin, SingleObjectMixin, View):
+class ClientNoteDelete(LoginRequiredMixin, SingleObjectMixin, UserPassesTestMixin, View):
     """
     Delete an individual :model:`rolodex.ClientNote`.
     """
 
     model = ClientNote
+
+    def test_func(self):
+        self.object = self.get_object()
+        return self.object.operator.id == self.request.user.id
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that")
+        return redirect("home:dashboard")
 
     def post(self, *args, **kwargs):
         self.object = self.get_object()
@@ -416,7 +435,7 @@ class ProjectTargetDelete(LoginRequiredMixin, SingleObjectMixin, View):
 
 class ProjectTargetToggle(LoginRequiredMixin, SingleObjectMixin, View):
     """
-    Toggle the ``compromised`` field of an individual :model:`rolodex.ProjecTarget`.
+    Toggle the ``compromised`` field of an individual :model:`rolodex.ProjectTarget`.
     """
 
     model = ProjectTarget
@@ -445,7 +464,7 @@ class ProjectTargetToggle(LoginRequiredMixin, SingleObjectMixin, View):
                 self.object.id,
                 self.request.user,
             )
-        except Exception as exception: # pragma: no cover
+        except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             log_message = template.format(type(exception).__name__, exception.args)
             logger.error(log_message)
@@ -519,7 +538,7 @@ class ProjectTaskCreate(LoginRequiredMixin, SingleObjectMixin, View):
                     "result": "error",
                     "message": "Your new task must have a valid task and due date",
                 }
-        except Exception as exception: # pragma: no cover
+        except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             log_message = template.format(type(exception).__name__, exception.args)
             logger.error(log_message)
@@ -564,7 +583,7 @@ class ProjectTaskToggle(LoginRequiredMixin, SingleObjectMixin, View):
                 self.object.id,
                 self.request.user,
             )
-        except Exception as exception: # pragma: no cover
+        except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             log_message = template.format(type(exception).__name__, exception.args)
             logger.error(log_message)
@@ -606,7 +625,7 @@ class ProjectObjectiveToggle(LoginRequiredMixin, SingleObjectMixin, View):
                 self.object.id,
                 self.request.user,
             )
-        except Exception as exception: # pragma: no cover
+        except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             log_message = template.format(type(exception).__name__, exception.args)
             logger.error(log_message)
@@ -676,7 +695,7 @@ class ProjectTaskUpdate(LoginRequiredMixin, SingleObjectMixin, View):
                     "result": "error",
                     "message": "Task cannot be updated without a valid task and due date",
                 }
-        except Exception as exception: # pragma: no cover
+        except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             log_message = template.format(type(exception).__name__, exception.args)
             logger.error(log_message)
@@ -730,6 +749,42 @@ class ProjectObjectiveRefresh(LoginRequiredMixin, SingleObjectMixin, View):
             request=self.request,
         )
         return HttpResponse(html)
+
+
+class ProjectScopeExport(LoginRequiredMixin, SingleObjectMixin, View):
+    """Export scope list from an individual :model:`rolodex.ProjectScope` as a file."""
+
+    model = ProjectScope
+
+    def get(self, *args, **kwargs):
+        lines = []
+        self.object = self.get_object()
+        for row in self.object.scope.split("\n"):
+            lines.append(row)
+        response = HttpResponse(lines, content_type="text/plain")
+        response["Content-Disposition"] = f"attachment; filename={self.object.name}_scope.txt"
+        return response
+
+
+class DeconflictionDelete(LoginRequiredMixin, SingleObjectMixin, View):
+    """
+    Delete an individual :model:`rolodex.Deconfliction`.
+    """
+
+    model = Deconfliction
+
+    def post(self, *args, **kwargs):
+        self.object = self.get_object()
+        obj_id = self.object.id
+        self.object.delete()
+        data = {"result": "success", "message": "Deconfliction event successfully deleted!"}
+        logger.info(
+            "Deleted %s %s by request of %s",
+            self.object.__class__.__name__,
+            obj_id,
+            self.request.user,
+        )
+        return JsonResponse(data)
 
 
 ##################
@@ -920,7 +975,7 @@ class ClientCreate(LoginRequiredMixin, CreateView):
                 # Raise an error to rollback transactions
                 raise forms.ValidationError(_("Invalid form data"))
         # Otherwise return ``form_invalid`` and display errors
-        except Exception as exception: # pragma: no cover
+        except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             message = template.format(type(exception).__name__, exception.args)
             logger.error(message)
@@ -1004,7 +1059,7 @@ class ClientUpdate(LoginRequiredMixin, UpdateView):
                 # Raise an error to rollback transactions
                 raise forms.ValidationError(_("Invalid form data"))
         # Otherwise return ``form_invalid`` and display errors
-        except Exception as exception: # pragma: no cover
+        except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             message = template.format(type(exception).__name__, exception.args)
             logger.error(message)
@@ -1096,7 +1151,7 @@ class ClientNoteCreate(LoginRequiredMixin, CreateView):
         return super().form_valid(form)
 
 
-class ClientNoteUpdate(LoginRequiredMixin, UpdateView):
+class ClientNoteUpdate(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
     """
     Update an individual :model:`rolodex.ClientNote`.
 
@@ -1115,6 +1170,14 @@ class ClientNoteUpdate(LoginRequiredMixin, UpdateView):
     model = ClientNote
     form_class = ClientNoteForm
     template_name = "note_form.html"
+
+    def test_func(self):
+        self.object = self.get_object()
+        return self.object.operator.id == self.request.user.id
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that")
+        return redirect("home:dashboard")
 
     def get_success_url(self):
         messages.success(
@@ -1212,6 +1275,7 @@ class ProjectCreate(LoginRequiredMixin, CreateView):
             )
             ctx["scopes"] = ProjectScopeFormSet(self.request.POST, prefix="scope")
             ctx["targets"] = ProjectTargetFormSet(self.request.POST, prefix="target")
+            ctx["whitecards"] = WhiteCardFormSet(self.request.POST, prefix="card")
         else:
             # Add extra forms to aid in configuration of a new project
             objectives = ProjectObjectiveFormSet(prefix="obj")
@@ -1222,11 +1286,14 @@ class ProjectCreate(LoginRequiredMixin, CreateView):
             scopes.extra = 1
             targets = ProjectTargetFormSet(prefix="target")
             targets.extra = 1
+            whitecards = WhiteCardFormSet(prefix="card")
+            whitecards.extra = 1
             # Assign the re-configured formsets to context vars
             ctx["objectives"] = objectives
             ctx["assignments"] = assignments
             ctx["scopes"] = scopes
             ctx["targets"] = targets
+            ctx["whitecards"] = whitecards
         return ctx
 
     def form_valid(self, form):
@@ -1235,6 +1302,7 @@ class ProjectCreate(LoginRequiredMixin, CreateView):
         scopes = ctx["scopes"]
         targets = ctx["targets"]
         objectives = ctx["objectives"]
+        whitecards = ctx["whitecards"]
         assignments = ctx["assignments"]
 
         # Now validate inline formsets
@@ -1264,18 +1332,24 @@ class ProjectCreate(LoginRequiredMixin, CreateView):
                     targets.instance = self.object
                     targets.save()
 
+                whitecards_valid = whitecards.is_valid()
+                if whitecards_valid:
+                    whitecards.instance = self.object
+                    whitecards.save()
+
                 if (
                     form.is_valid()
                     and objectives_valid
                     and assignments_valid
                     and scopes_valid
                     and targets_valid
+                    and whitecards_valid
                 ):
                     return super().form_valid(form)
                 # Raise an error to rollback transactions
                 raise forms.ValidationError(_("Invalid form data"))
         # Otherwise return ``form_invalid`` and display errors
-        except Exception as exception: # pragma: no cover
+        except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             message = template.format(type(exception).__name__, exception.args)
             logger.error(message)
@@ -1344,6 +1418,9 @@ class ProjectUpdate(LoginRequiredMixin, UpdateView):
             ctx["targets"] = ProjectTargetFormSet(
                 self.request.POST, prefix="target", instance=self.object
             )
+            ctx["whitecards"] = WhiteCardFormSet(
+                self.request.POST, prefix="card", instance=self.object
+            )
         else:
             ctx["objectives"] = ProjectObjectiveFormSet(
                 prefix="obj", instance=self.object
@@ -1353,6 +1430,7 @@ class ProjectUpdate(LoginRequiredMixin, UpdateView):
             )
             ctx["scopes"] = ProjectScopeFormSet(prefix="scope", instance=self.object)
             ctx["targets"] = ProjectTargetFormSet(prefix="target", instance=self.object)
+            ctx["whitecards"] = WhiteCardFormSet(prefix="card", instance=self.object)
         return ctx
 
     def get_success_url(self):
@@ -1367,6 +1445,7 @@ class ProjectUpdate(LoginRequiredMixin, UpdateView):
         scopes = ctx["scopes"]
         targets = ctx["targets"]
         objectives = ctx["objectives"]
+        whitecards = ctx["whitecards"]
         assignments = ctx["assignments"]
 
         # Now validate inline formsets
@@ -1396,6 +1475,11 @@ class ProjectUpdate(LoginRequiredMixin, UpdateView):
                     targets.instance = self.object
                     targets.save()
 
+                whitecards_valid = whitecards.is_valid()
+                if whitecards_valid:
+                    whitecards.instance = self.object
+                    whitecards.save()
+
                 # Proceed with form submission
                 if (
                     form.is_valid()
@@ -1403,6 +1487,7 @@ class ProjectUpdate(LoginRequiredMixin, UpdateView):
                     and assignments_valid
                     and scopes_valid
                     and targets_valid
+                    and whitecards_valid
                 ):
                     return super().form_valid(form)
                 # Raise an error to rollback transactions
@@ -1502,7 +1587,7 @@ class ProjectNoteCreate(LoginRequiredMixin, CreateView):
         return super().form_valid(form)
 
 
-class ProjectNoteUpdate(LoginRequiredMixin, UpdateView):
+class ProjectNoteUpdate(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
     """
     Update an individual :model:`rolodex.ProjectNote`.
 
@@ -1522,6 +1607,14 @@ class ProjectNoteUpdate(LoginRequiredMixin, UpdateView):
     form_class = ProjectNoteForm
     template_name = "note_form.html"
 
+    def test_func(self):
+        self.object = self.get_object()
+        return self.object.operator.id == self.request.user.id
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that")
+        return redirect("home:dashboard")
+
     def get_success_url(self):
         messages.success(
             self.request, "Note successfully updated.", extra_tags="alert-success"
@@ -1534,6 +1627,89 @@ class ProjectNoteUpdate(LoginRequiredMixin, UpdateView):
         ctx = super().get_context_data(**kwargs)
         ctx["note_object"] = self.object.project
         ctx["cancel_link"] = "{}#notes".format(
+            reverse("rolodex:project_detail", kwargs={"pk": self.object.project.id})
+        )
+        return ctx
+
+
+class DeconflictionCreate(LoginRequiredMixin, CreateView):
+    """
+    Create an individual :model:`rolodex.Deconfliction`.
+
+    **Context**
+
+    ``cancel_link``
+        Link for the form's Cancel button to return to project detail page
+
+    **Template**
+
+    :template:`rolodex/deconfliction_form.html`
+    """
+
+    model = Deconfliction
+    form_class = DeconflictionForm
+    template_name = "rolodex/deconfliction_form.html"
+
+    def get_success_url(self):
+        messages.success(
+            self.request,
+            "Deconfliction successfully saved.",
+            extra_tags="alert-success",
+        )
+        return "{}#deconflictions".format(
+            reverse("rolodex:project_detail", kwargs={"pk": self.object.project.pk})
+        )
+
+    def get_initial(self):
+        return {"status": 1,}
+
+    def form_valid(self, form, **kwargs):
+        self.object = form.save(commit=False)
+        self.object.project_id = self.kwargs.get("pk")
+        self.object.save()
+        return super().form_valid(form)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        project_instance = get_object_or_404(Project, pk=self.kwargs.get("pk"))
+        ctx["project"] = project_instance
+        ctx["cancel_link"] = "{}#deconflictions".format(
+            reverse("rolodex:project_detail", kwargs={"pk": project_instance.id})
+        )
+        return ctx
+
+
+class DeconflictionUpdate(LoginRequiredMixin, UpdateView):
+    """
+    Update an individual :model:`rolodex.Deconfliction`.
+
+    **Context**
+
+    ``cancel_link``
+        Link for the form's Cancel button to return to Deconfliction detail page
+
+    **Template**
+
+    :template:`rolodex/deconfliction_form.html`
+    """
+
+    model = Deconfliction
+    form_class = DeconflictionForm
+    template_name = "rolodex/deconfliction_form.html"
+
+    def get_success_url(self):
+        messages.success(
+            self.request,
+            "Deconfliction successfully saved.",
+            extra_tags="alert-success",
+        )
+        return "{}#deconflictions".format(
+            reverse("rolodex:project_detail", kwargs={"pk": self.object.project.pk})
+        )
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["cancel_link"] = "{}#deconflictions".format(
             reverse("rolodex:project_detail", kwargs={"pk": self.object.project.id})
         )
         return ctx

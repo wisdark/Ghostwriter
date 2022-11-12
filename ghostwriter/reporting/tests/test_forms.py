@@ -44,6 +44,8 @@ class FindingFormTests(TestCase):
         title=None,
         finding_type_id=None,
         severity_id=None,
+        cvss_score=None,
+        cvss_vector=None,
         description=None,
         impact=None,
         mitigation=None,
@@ -59,6 +61,8 @@ class FindingFormTests(TestCase):
                 "title": title,
                 "finding_type": finding_type_id,
                 "severity": severity_id,
+                "cvss_score": cvss_score,
+                "cvss_vector": cvss_vector,
                 "description": description,
                 "impact": impact,
                 "mitigation": mitigation,
@@ -151,6 +155,7 @@ class ReportFindingLinkUpdateFormTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.finding = ReportFindingLinkFactory()
+        cls.blank_finding = ReportFindingLinkFactory(added_as_blank=True)
 
     def setUp(self):
         pass
@@ -166,6 +171,8 @@ class ReportFindingLinkUpdateFormTests(TestCase):
         affected_entities=None,
         finding_type_id=None,
         severity_id=None,
+        cvss_score=None,
+        cvss_vector=None,
         description=None,
         impact=None,
         mitigation=None,
@@ -182,6 +189,8 @@ class ReportFindingLinkUpdateFormTests(TestCase):
                 "assigned_to": assigned_to_id,
                 "finding_type": finding_type_id,
                 "severity": severity_id,
+                "cvss_score": cvss_score,
+                "cvss_vector": cvss_vector,
                 "affected_entities": affected_entities,
                 "description": description,
                 "impact": impact,
@@ -203,6 +212,12 @@ class ReportFindingLinkUpdateFormTests(TestCase):
         self.finding.assigned_to = None
         form = self.form_data(instance=self.finding, **self.finding.__dict__)
         self.assertTrue(form.is_valid())
+
+    def test_added_as_blank_field(self):
+        form = self.form_data(instance=self.blank_finding, **self.blank_finding.__dict__)
+        self.assertTrue(form.is_valid())
+        form.save()
+        self.assertTrue(self.blank_finding.added_as_blank)
 
 
 class EvidenceFormTests(TestCase):

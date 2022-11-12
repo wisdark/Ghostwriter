@@ -6,9 +6,11 @@ import json
 import logging
 import logging.config
 import os
+import re
 import zipfile
 from asgiref.sync import async_to_sync
 from datetime import datetime
+from os.path import exists
 from socket import gaierror
 
 # Django Imports
@@ -16,7 +18,11 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
+from django.contrib.auth.mixins import (
+    LoginRequiredMixin,
+    PermissionRequiredMixin,
+    UserPassesTestMixin,
+)
 from django.core.files import File
 from django.core.files.base import ContentFile
 from django.db.models import Q
@@ -27,9 +33,10 @@ from django.http import (
     HttpResponseRedirect,
     JsonResponse,
 )
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse, reverse_lazy
+from django.utils import dateformat, timezone
 from django.views import generic
 from django.views.generic.detail import DetailView, SingleObjectMixin
 from django.views.generic.edit import CreateView, DeleteView, UpdateView, View
@@ -42,7 +49,7 @@ from pptx.exc import PackageNotFoundError as PptxPackageNotFoundError
 from xlsxwriter.workbook import Workbook
 
 # Ghostwriter Libraries
-from ghostwriter.commandcenter.models import ReportConfiguration
+from ghostwriter.commandcenter.models import CompanyInformation, ReportConfiguration
 from ghostwriter.modules import reportwriter
 from ghostwriter.modules.exceptions import MissingTemplate
 from ghostwriter.rolodex.models import Project, ProjectAssignment
@@ -205,6 +212,8 @@ class AssignFinding(LoginRequiredMixin, SingleObjectMixin, View):
                 report=report,
                 assigned_to=self.request.user,
                 position=get_position(report.id, self.object.severity),
+                cvss_score=self.object.cvss_score,
+                cvss_vector=self.object.cvss_vector,
             )
             report_link.save()
 
@@ -226,12 +235,20 @@ class AssignFinding(LoginRequiredMixin, SingleObjectMixin, View):
         return JsonResponse(data)
 
 
-class LocalFindingNoteDelete(LoginRequiredMixin, SingleObjectMixin, View):
+class LocalFindingNoteDelete(LoginRequiredMixin, SingleObjectMixin, UserPassesTestMixin, View):
     """
     Delete an individual :model:`reporting.LocalFindingNote`.
     """
 
     model = LocalFindingNote
+
+    def test_func(self):
+        self.object = self.get_object()
+        return self.object.operator.id == self.request.user.id
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that")
+        return redirect("home:dashboard")
 
     def post(self, *args, **kwargs):
         self.object = self.get_object()
@@ -246,12 +263,20 @@ class LocalFindingNoteDelete(LoginRequiredMixin, SingleObjectMixin, View):
         return JsonResponse(data)
 
 
-class FindingNoteDelete(LoginRequiredMixin, SingleObjectMixin, View):
+class FindingNoteDelete(LoginRequiredMixin, SingleObjectMixin, UserPassesTestMixin, View):
     """
     Delete an individual :model:`reporting.FindingNote`.
     """
 
     model = FindingNote
+
+    def test_func(self):
+        self.object = self.get_object()
+        return self.object.operator.id == self.request.user.id
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that")
+        return redirect("home:dashboard")
 
     def post(self, *args, **kwargs):
         self.object = self.get_object()
@@ -317,7 +342,7 @@ class ReportActivate(LoginRequiredMixin, SingleObjectMixin, View):
                 "report_url": self.object.get_absolute_url(),
                 "message": message,
             }
-        except Exception as exception: # pragma: no cover
+        except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             log_message = template.format(type(exception).__name__, exception.args)
             logger.error(log_message)
@@ -362,7 +387,7 @@ class ReportStatusToggle(LoginRequiredMixin, SingleObjectMixin, View):
                 self.object.id,
                 self.request.user,
             )
-        except Exception as exception: # pragma: no cover
+        except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             log_message = template.format(type(exception).__name__, exception.args)
             logger.error(log_message)
@@ -404,13 +429,13 @@ class ReportDeliveryToggle(LoginRequiredMixin, SingleObjectMixin, View):
                 self.object.id,
                 self.request.user,
             )
-        except Exception as exception: # pragma: no cover
+        except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             log_message = template.format(type(exception).__name__, exception.args)
             logger.error(log_message)
             data = {
                 "result": "error",
-                "message": "Could not update report's deliveery status",
+                "message": "Could not update report's delivery status",
             }
 
         return JsonResponse(data)
@@ -462,7 +487,7 @@ class ReportFindingStatusUpdate(LoginRequiredMixin, SingleObjectMixin, View):
                 self.request.user,
             )
         # Return an error message if the query for the requested status returned DoesNotExist
-        except Exception as exception: # pragma: no cover
+        except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             log_message = template.format(type(exception).__name__, exception.args)
             logger.error(log_message)
@@ -534,7 +559,7 @@ class ReportTemplateSwap(LoginRequiredMixin, SingleObjectMixin, View):
                                     "docx_lint_message"
                                 ] = "Selected Word template has an unknown linter status. Check and lint the template before generating a report."
                             data["docx_url"] = docx_template_query.get_absolute_url()
-                except Exception: # pragma: no cover
+                except Exception:  # pragma: no cover
                     logger.exception("Failed to get the template status")
                     data["docx_lint_result"] = "failed"
                     data[
@@ -562,7 +587,7 @@ class ReportTemplateSwap(LoginRequiredMixin, SingleObjectMixin, View):
                                     "pptx_lint_message"
                                 ] = "Selected PowerPoint template has an unknown linter status. Check and lint the template before generating a report."
                             data["pptx_url"] = pptx_template_query.get_absolute_url()
-                except Exception: # pragma: no cover
+                except Exception:  # pragma: no cover
                     logger.exception("Failed to get the template status")
                     data["pptx_lint_result"] = "failed"
                     data[
@@ -596,7 +621,7 @@ class ReportTemplateSwap(LoginRequiredMixin, SingleObjectMixin, View):
                     pptx_template_id,
                     self.request.user,
                 )
-            except Exception: # pragma: no cover
+            except Exception:  # pragma: no cover
                 data = {
                     "result": "error",
                     "message": "An exception prevented the template change",
@@ -682,9 +707,31 @@ class ReportClone(LoginRequiredMixin, SingleObjectMixin, View):
             report_to_clone.save()
             new_report_pk = report_to_clone.pk
             for finding in findings:
+                # Get any evidence files attached to the original finding
+                evidences = Evidence.objects.filter(finding=finding.pk)
+                # Create a clone of this finding attached to the new report
                 finding.report = report_to_clone
                 finding.pk = None
                 finding.save()
+                # Clone evidence files and attach them to the new finding
+                for evidence in evidences:
+                    if exists(evidence.document.path):
+                        evidence_file = File(evidence.document, os.path.basename(evidence.document.name))
+                        evidence.finding = finding
+                        evidence._current_evidence = None
+                        evidence.document = evidence_file
+                        evidence.pk = None
+                        evidence.save()
+                    else:
+                        logger.warning(
+                            "Evidence file not found: %s",
+                            evidence.document.path,
+                        )
+                        messages.warning(
+                            self.request,
+                            f"An evidence file was missing and could not be copied: {evidence.friendly_name} ({os.path.basename(evidence.document.name)})",
+                            extra_tags="alert-warning"
+                        )
 
             logger.info(
                 "Cloned %s %s by request of %s",
@@ -698,7 +745,7 @@ class ReportClone(LoginRequiredMixin, SingleObjectMixin, View):
                 "Successfully cloned your report: {}".format(self.object.title),
                 extra_tags="alert-error",
             )
-        except Exception as exception: # pragma: no cover
+        except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             log_message = template.format(type(exception).__name__, exception.args)
             logger.error(log_message)
@@ -739,6 +786,7 @@ class AssignBlankFinding(LoginRequiredMixin, SingleObjectMixin, View):
                 report=self.object,
                 assigned_to=self.request.user,
                 position=get_position(self.object.id, self.severity),
+                added_as_blank=True,
             )
             report_link.save()
 
@@ -754,7 +802,7 @@ class AssignBlankFinding(LoginRequiredMixin, SingleObjectMixin, View):
                 "Successfully added a blank finding to the report",
                 extra_tags="alert-success",
             )
-        except Exception as exception: # pragma: no cover
+        except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             log_message = template.format(type(exception).__name__, exception.args)
             logger.error(log_message)
@@ -802,7 +850,7 @@ class ConvertFinding(LoginRequiredMixin, SingleObjectMixin, View):
                     "finding_type": finding_instance.finding_type,
                 }
             )
-        except Exception as exception: # pragma: no cover
+        except Exception as exception:  # pragma: no cover
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             log_message = template.format(type(exception).__name__, exception.args)
             logger.error(log_message)
@@ -872,13 +920,13 @@ def findings_list(request):
             .filter(
                 Q(title__icontains=search_term) | Q(description__icontains=search_term)
             )
-            .order_by("severity__weight", "finding_type", "title")
+            .order_by("severity__weight", "-cvss_score", "finding_type", "title")
         )
     else:
         findings = (
             Finding.objects.select_related("severity", "finding_type")
             .all()
-            .order_by("severity__weight", "finding_type", "title")
+            .order_by("severity__weight", "-cvss_score", "finding_type", "title")
         )
     findings_filter = FindingFilter(request.GET, queryset=findings)
     return render(request, "reporting/finding_list.html", {"filter": findings_filter})
@@ -939,18 +987,39 @@ def upload_evidence_modal_success(request):
 def generate_report_name(report_instance):
     """
     Generate a filename for a report based on the current time and attributes of an
-    individual :model:`reporting.Report`. All periods and commas are removed to keep
+    individual :model:`reporting.Report`. All illegal characters are removed to keep
     the filename browser-friendly.
     """
 
-    def replace_chars(report_name):
-        return report_name.replace(".", "").replace(",", "")
+    def replace_placeholders(report_name, report_instance):
+        """Replace placeholders in the report name with the appropriate values."""
+        company_info = CompanyInformation.get_solo()
+        report_name = report_name.replace("{company}", company_info.company_name)
+        report_name = report_name.replace("{client}", report_instance.project.client.name)
+        report_name = report_name.replace("{date}", dateformat.format(timezone.now(), settings.DATE_FORMAT))
+        report_name = report_name.replace("{assessment_type}", report_instance.project.project_type.project_type)
+        return report_name
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    client_name = report_instance.project.client
-    assessment_type = report_instance.project.project_type
-    report_name = replace_chars(f"{timestamp}_{client_name}_{assessment_type}")
-    return report_name
+    def replace_date_format(report_name):
+        """Replace date format placeholders in the report name with the appropriate values."""
+        # Find all strings wrapped in curly braces
+        datetime_regex = r"(?<=\{)(.*?)(?=\})"
+        for match in re.findall(datetime_regex, report_name):
+            strfmt = dateformat.format(timezone.now(), match)
+            report_name = report_name.replace(match, strfmt)
+        return report_name
+
+    def replace_chars(report_name):
+        """Remove illegal characters from the report name."""
+        report_name =  report_name.replace("–", "-")
+        return re.sub(r"[<>:;\"'/\\|?*.,{}\[\]]", "", report_name)
+
+    report_config = ReportConfiguration.get_solo()
+    report_name = report_config.report_filename
+    report_name = replace_placeholders(report_name, report_instance)
+    report_name = replace_date_format(report_name)
+    report_name = replace_chars(report_name)
+    return report_name.strip()
 
 
 def zip_directory(path, zip_handler):
@@ -978,8 +1047,8 @@ def archive(request, pk):
         report_instance = Report.objects.select_related("project", "project__client").get(
             pk=pk
         )
-        output_path = os.path.join(settings.MEDIA_ROOT, report_instance.title)
-        evidence_path = os.path.join(settings.MEDIA_ROOT)
+        # output_path = os.path.join(settings.MEDIA_ROOT, report_instance.title)
+        # evidence_path = os.path.join(settings.MEDIA_ROOT)
         archive_loc = os.path.join(settings.MEDIA_ROOT, "archives/")
         evidence_loc = os.path.join(settings.MEDIA_ROOT, "evidence", str(pk))
         report_name = generate_report_name(report_instance)
@@ -1518,6 +1587,8 @@ class ReportTemplateUpdate(LoginRequiredMixin, PermissionRequiredMixin, UpdateVi
     def has_permission(self):
         self.object = self.get_object()
         if self.object.protected:
+            if self.request.user.role in ("manager", "admin",):
+                return True
             return self.request.user.is_staff
         return self.request.user.is_active
 
@@ -1578,6 +1649,8 @@ class ReportTemplateDelete(LoginRequiredMixin, PermissionRequiredMixin, DeleteVi
     def has_permission(self):
         self.object = self.get_object()
         if self.object.protected:
+            if self.request.user.role == "manager" or self.request.user.role == "admin":
+                return True
             return self.request.user.is_staff
         return self.request.user.is_active
 
@@ -2483,7 +2556,7 @@ class FindingNoteCreate(LoginRequiredMixin, CreateView):
         return super().form_valid(form)
 
 
-class FindingNoteUpdate(LoginRequiredMixin, UpdateView):
+class FindingNoteUpdate(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
     """
     Update an individual instance of :model:`reporting.FindingNote`.
 
@@ -2500,6 +2573,14 @@ class FindingNoteUpdate(LoginRequiredMixin, UpdateView):
     model = FindingNote
     form_class = FindingNoteForm
     template_name = "note_form.html"
+
+    def test_func(self):
+        self.object = self.get_object()
+        return self.object.operator.id == self.request.user.id
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that")
+        return redirect("home:dashboard")
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -2562,7 +2643,7 @@ class LocalFindingNoteCreate(LoginRequiredMixin, CreateView):
         return super().form_valid(form)
 
 
-class LocalFindingNoteUpdate(LoginRequiredMixin, UpdateView):
+class LocalFindingNoteUpdate(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
     """
     Update an individual instance of :model:`reporting.LocalFindingNote`.
 
@@ -2579,6 +2660,14 @@ class LocalFindingNoteUpdate(LoginRequiredMixin, UpdateView):
     model = LocalFindingNote
     form_class = LocalFindingNoteForm
     template_name = "note_form.html"
+
+    def test_func(self):
+        self.object = self.get_object()
+        return self.object.operator.id == self.request.user.id
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that")
+        return redirect("home:dashboard")
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)

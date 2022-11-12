@@ -2,6 +2,7 @@
 Base settings to build other settings files upon.
 """
 # Standard Libraries
+from datetime import timedelta
 from pathlib import Path
 
 # Django Imports
@@ -10,9 +11,9 @@ from django.contrib.messages import constants as messages
 # 3rd Party Libraries
 import environ
 
-__version__ = "2.2.3"
+__version__ = "3.1.4"
 VERSION = __version__
-RELEASE_DATE = "16 Feb 2022"
+RELEASE_DATE = "11 November 2022"
 
 ROOT_DIR = Path(__file__).resolve(strict=True).parent.parent.parent
 APPS_DIR = ROOT_DIR / "ghostwriter"
@@ -40,11 +41,20 @@ SITE_ID = 1
 # https://docs.djangoproject.com/en/dev/ref/settings/#use-i18n
 USE_I18N = True
 # https://docs.djangoproject.com/en/dev/ref/settings/#use-l10n
-USE_L10N = True
+USE_L10N = False
+# https://docs.djangoproject.com/en/4.0/ref/settings/#date-format
+DATE_FORMAT = env(
+    "DJANGO_DATE_FORMAT",
+    default="d M Y",
+)
 # https://docs.djangoproject.com/en/dev/ref/settings/#use-tz
 USE_TZ = True
 # https://docs.djangoproject.com/en/dev/ref/settings/#locale-paths
 LOCALE_PATHS = [str(ROOT_DIR / "locale")]
+# https://docs.djangoproject.com/en/dev/ref/settings/#csrf-trusted-origins
+origins = env("DJANGO_CSRF_TRUSTED_ORIGINS", default="")
+if origins:
+    CSRF_TRUSTED_ORIGINS = origins.split(" ")
 
 # DATABASES
 # ------------------------------------------------------------------------------
@@ -90,6 +100,13 @@ THIRD_PARTY_APPS = [
     "tinymce",
     "django_bleach",
     "timezone_field",
+    "health_check",
+    "health_check.db",
+    "health_check.cache",
+    "health_check.storage",
+    "health_check.contrib.migrations",
+    "health_check.contrib.psutil",
+    "health_check.contrib.redis",
 ]
 
 LOCAL_APPS = [
@@ -101,6 +118,8 @@ LOCAL_APPS = [
     "ghostwriter.oplog.apps.OplogConfig",
     "ghostwriter.commandcenter.apps.CommandCenterConfig",
     "ghostwriter.singleton.apps.SingletonConfig",
+    "ghostwriter.api.apps.ApiConfig",
+    "ghostwriter.status.apps.StatusConfig",
 ]
 # https://docs.djangoproject.com/en/dev/ref/settings/#installed-apps
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -330,7 +349,7 @@ MESSAGE_TAGS = {
 # health checks can take a long time and will be different for everyone.
 
 Q_CLUSTER = {
-    "name": env("QCLUSTER_NAME", default="soar"),
+    "name": env("DJANGO_QCLUSTER_NAME", default="soar"),
     "timeout": 43200,
     "retry": 43200,
     "recycle": 500,
@@ -379,6 +398,8 @@ BLEACH_ALLOWED_TAGS = [
     "h4",
     "h5",
     "h6",
+    "blockquote",
+    "br",
 ]
 # Which HTML attributes are allowed
 BLEACH_ALLOWED_ATTRIBUTES = ["href", "title", "style", "class", "src"]
@@ -397,7 +418,7 @@ BLEACH_STRIP_TAGS = True
 # Strip HTML comments, or leave them in.
 BLEACH_STRIP_COMMENTS = True
 
-# Django REST Configuration
+# Ghostwriter API Configuration
 # ------------------------------------------------------------------------------
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
@@ -411,3 +432,31 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
     "PAGE_SIZE": 100,
 }
+
+GRAPHQL_JWT = {
+    "JWT_AUTH_HEADER_PREFIX": "Bearer",
+    "JWT_VERIFY": True,
+    "JWT_VERIFY_EXPIRATION": True,
+    "JWT_LONG_RUNNING_REFRESH_TOKEN": True,
+    "JWT_EXPIRATION_DELTA": timedelta(minutes=15),
+    "JWT_REFRESH_EXPIRATION_DELTA": timedelta(days=7),
+    "JWT_AUDIENCE": "Ghostwriter",
+    "JWT_SECRET_KEY": env(
+        "DJANGO_JWT_SECRET_KEY",
+        default="Vso7i8BApwA6km4L50PFRvqcTtGZHLrC1pnKLCXqfTWifhjbGq4nTd6ZrDH2Iobe",
+    ),
+    "JWT_ALGORITHM": "HS256",
+}
+
+HASURA_ACTION_SECRET = env(
+    "HASURA_ACTION_SECRET",
+    default="changeme",
+)
+
+# Health Checks
+# ------------------------------------------------------------------------------
+HEALTH_CHECK = {
+    "DISK_USAGE_MAX": env("HEALTHCHECK_DISK_USAGE_MAX", default=90),
+    "MEMORY_MIN": env("HEALTHCHECK_MEM_MIN", default=100),
+}
+REDIS_URL = env("REDIS_URL", default="redis://redis:6379")

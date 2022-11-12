@@ -11,16 +11,20 @@ import logging
 import os
 import random
 import re
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 # Django Imports
 from django.conf import settings
+from django.utils.dateformat import format as dateformat
 
 # 3rd Party Libraries
 import docx
 import jinja2
+import jinja2.sandbox
 import pptx
 from bs4 import BeautifulSoup, NavigableString
+from dateutil.parser import parse as parse_datetime
+from dateutil.parser._parser import ParserError
 from docx.enum.dml import MSO_THEME_COLOR_INDEX
 from docx.enum.style import WD_STYLE_TYPE
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_COLOR_INDEX
@@ -29,7 +33,7 @@ from docx.opc.exceptions import PackageNotFoundError as DocxPackageNotFoundError
 from docx.oxml.shared import OxmlElement, qn
 from docx.shared import Inches, Pt, RGBColor
 from docxtpl import DocxTemplate, RichText
-from jinja2.exceptions import TemplateSyntaxError, UndefinedError
+from jinja2.exceptions import TemplateRuntimeError, TemplateSyntaxError, UndefinedError
 from pptx import Presentation
 from pptx.dml.color import RGBColor as PptxRGBColor
 from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, PP_ALIGN
@@ -40,6 +44,7 @@ from xlsxwriter.workbook import Workbook
 # Ghostwriter Libraries
 from ghostwriter.commandcenter.models import CompanyInformation, ReportConfiguration
 from ghostwriter.modules.custom_serializers import ReportDataSerializer
+from ghostwriter.modules.exceptions import InvalidFilterValue
 from ghostwriter.modules.linting_utils import LINTER_CONTEXT
 from ghostwriter.reporting.models import Evidence
 
@@ -60,10 +65,23 @@ def filter_severity(findings, allowlist):
         List of strings matching severity categories to allow through filter
     """
     filtered_values = []
-    allowlist = [severity.lower() for severity in allowlist]
-    for finding in findings:
-        if finding["severity"].lower() in allowlist:
-            filtered_values.append(finding)
+    if isinstance(allowlist, list):
+        allowlist = [severity.lower() for severity in allowlist]
+    else:
+        raise InvalidFilterValue(
+            f'Allowlist passed into `filter_severity()` filter is not a list ("{allowlist}"); must be like `["Critical", "High"]`'
+        )
+    try:
+        for finding in findings:
+            if finding["severity"].lower() in allowlist:
+                filtered_values.append(finding)
+    except (KeyError, TypeError):
+        logger.exception(
+            "Error parsing ``findings`` as a list of dictionaries: %s", findings
+        )
+        raise InvalidFilterValue(
+            "Invalid list of findings passed into `filter_severity()` filter; must be the `{{ findings }}` object"
+        )
     return filtered_values
 
 
@@ -79,10 +97,23 @@ def filter_type(findings, allowlist):
         List of strings matching severity categories to allow through filter
     """
     filtered_values = []
-    allowlist = [type.lower() for type in allowlist]
-    for finding in findings:
-        if finding["finding_type"].lower() in allowlist:
-            filtered_values.append(finding)
+    if isinstance(allowlist, list):
+        allowlist = [type.lower() for type in allowlist]
+    else:
+        raise InvalidFilterValue(
+            f'Allowlist passed into `filter_type()` filter is not a list ("{allowlist}"); must be like `["Network", "Web"]`'
+        )
+    try:
+        for finding in findings:
+            if finding["finding_type"].lower() in allowlist:
+                filtered_values.append(finding)
+    except (KeyError, TypeError):
+        logger.exception(
+            "Error parsing ``findings`` as a list of dictionaries: %s", findings
+        )
+        raise InvalidFilterValue(
+            "Invalid list of findings passed into `filter_type()` filter; must be the `{{ findings }}` object"
+        )
     return filtered_values
 
 
@@ -103,7 +134,7 @@ def strip_html(s):
             output += tag
         elif tag.name in ("br", "p"):
             output += "\n"
-    return output
+    return output.strip()
 
 
 def compromised(targets):
@@ -116,13 +147,21 @@ def compromised(targets):
         List of dictionary objects (JSON) for targets
     """
     filtered_targets = []
-    for target in targets:
-        if target["compromised"]:
-            filtered_targets.append(target)
+    try:
+        for target in targets:
+            if target["compromised"]:
+                filtered_targets.append(target)
+    except (KeyError, TypeError):
+        logger.exception(
+            "Error parsing ``targets`` as a list of dictionaries: %s", targets
+        )
+        raise InvalidFilterValue(
+            "Invalid list of targets passed into `compromised()` filter; must be the `{{ targets }}` object"
+        )
     return filtered_targets
 
 
-def add_days(date, format_str, days):
+def add_days(date, days):
     """
     Add a number of business days to a date.
 
@@ -130,36 +169,50 @@ def add_days(date, format_str, days):
 
     ``date``
         Date string to add business days to
-    ``format_str``
-        The format of the provided date
     ``days``
         Number of business days to add to the date
     """
-    # Loop until all days added
-    date = datetime.strptime(date, format_str)
-    if days > 0:
-        while days > 0:
-            # Add one day to the date
-            date += timedelta(days=1)
-            # Check if the day is a business day
-            weekday = date.weekday()
-            if weekday >= 5:
-                # Return to the top (Sunday is 6)
-                continue
-            # Decrement the number of days to add
-            days -= 1
-    else:
-        # Same as above but in reverse for negative days
-        while days < 0:
-            date -= timedelta(days=1)
-            weekday = date.weekday()
-            if weekday >= 5:
-                continue
-            days += 1
-    return date.strftime(format_str)
+    new_date = None
+    try:
+        days = int(days)
+    except ValueError:
+        logger.exception("Error parsing ``days`` as an integer: %s", days)
+        raise InvalidFilterValue(
+            f'Invalid integer ("{days}") passed into `add_days()` filter'
+        )
+
+    try:
+        date_obj = parse_datetime(date)
+        # Loop until all days added
+        if days > 0:
+            while days > 0:
+                # Add one day to the date
+                date_obj += timedelta(days=1)
+                # Check if the day is a business day
+                weekday = date_obj.weekday()
+                if weekday >= 5:
+                    # Return to the top (Sunday is 6)
+                    continue
+                # Decrement the number of days to add
+                days -= 1
+        else:
+            # Same as above but in reverse for negative days
+            while days < 0:
+                date_obj -= timedelta(days=1)
+                weekday = date_obj.weekday()
+                if weekday >= 5:
+                    continue
+                days += 1
+        new_date = dateformat(date_obj, settings.DATE_FORMAT)
+    except ParserError:
+        logger.exception("Error parsing ``date`` as a date: %s", date)
+        raise InvalidFilterValue(
+            f'Invalid date string ("{date}") passed into `add_days()` filter'
+        )
+    return new_date
 
 
-def format_datetime(date, current_format, new_format):
+def format_datetime(date, new_format):
     """
     Change the format of a given date string.
 
@@ -170,8 +223,17 @@ def format_datetime(date, current_format, new_format):
     ``format_str``
         The format of the provided date
     """
-    current = datetime.strptime(date, current_format)
-    return current.strftime(new_format)
+    formatted_date = None
+    try:
+        date_obj = parse_datetime(date)
+        formatted_date = dateformat(date_obj, new_format)
+    except ParserError:
+        formatted_date = date
+        logger.exception("Error parsing ``date`` as a date: %s", date)
+        raise InvalidFilterValue(
+            f'Invalid date string ("{date}") passed into `format_datetime()` filter'
+        )
+    return formatted_date
 
 
 def prepare_jinja2_env(debug=False):
@@ -181,7 +243,9 @@ def prepare_jinja2_env(debug=False):
     else:
         undefined = jinja2.make_logging_undefined(logger=logger, base=jinja2.Undefined)
 
-    env = jinja2.Environment(undefined=undefined, extensions=["jinja2.ext.debug"], autoescape=True)
+    env = jinja2.sandbox.SandboxedEnvironment(
+        undefined=undefined, extensions=["jinja2.ext.debug"], autoescape=True
+    )
     env.filters["filter_severity"] = filter_severity
     env.filters["filter_type"] = filter_type
     env.filters["strip_html"] = strip_html
@@ -232,6 +296,7 @@ class Reportwriter:
         "sub",
         "sup",
         "del",
+        "blockquote",
     ]
 
     # Allowlist for evidence file extensions / filetypes
@@ -271,7 +336,7 @@ class Reportwriter:
             self.template_loc,
         )
 
-    def valid_xml_char_ordinal(self, c):
+    def _valid_xml_char_ordinal(self, c):
         """
         Clean string to make all characters XML compatible for Word documents.
 
@@ -312,7 +377,7 @@ class Reportwriter:
 
         return output
 
-    def make_figure(self, par, ref=None):
+    def _make_figure(self, par, ref=None):
         """
         Append a text run configured as an auto-incrementing figure to the provided
         paragraph. The label and number are wrapped in ``w:bookmarkStart`` and
@@ -383,7 +448,7 @@ class Reportwriter:
         bookmark_end.set(qn("w:id"), "0")
         p.append(bookmark_end)
 
-    def make_cross_ref(self, par, ref):
+    def _make_cross_ref(self, par, ref):
         """
         Append a text run configured as a cross-reference to the provided paragraph.
 
@@ -429,7 +494,7 @@ class Reportwriter:
 
         return par
 
-    def list_number(self, par, prev=None, level=None, num=True):
+    def _list_number(self, par, prev=None, level=None, num=True):
         """
         Makes the specified paragraph a list item with a specific level and optional restart.
 
@@ -530,7 +595,7 @@ class Reportwriter:
 
         return par
 
-    def get_styles(self, tag):
+    def _get_styles(self, tag):
         """
         Get styles from an BS4 ``Tag`` object's ``styles`` attribute and convert
         the string to a dictionary.
@@ -538,7 +603,7 @@ class Reportwriter:
         **Parameters**
 
         ``tag`` : Tag
-            BS4 ``Tag`` witth a ``styles`` attribute
+            BS4 ``Tag`` with a ``styles`` attribute
         """
         tag_styles = {}
         style_str = tag.attrs["style"]
@@ -577,7 +642,7 @@ class Reportwriter:
                 )
         return tag_styles
 
-    def process_evidence(self, evidence, par):
+    def _process_evidence(self, evidence, par):
         """
         Process the specified evidence file for the named finding to add it to the Word document.
 
@@ -589,7 +654,7 @@ class Reportwriter:
             Paragraph meant to hold the evidence
         """
         file_path = settings.MEDIA_ROOT + "/" + evidence["path"]
-        extension = file_path.split(".")[-1]
+        extension = file_path.split(".")[-1].lower()
 
         # First, check if the file still exists on disk
         if os.path.exists(file_path):
@@ -600,7 +665,7 @@ class Reportwriter:
                     evidence_text = evidence_contents.read()
                     if self.report_type == "pptx":
                         if par:
-                            self.delete_paragraph(par)
+                            self._delete_paragraph(par)
                         top = Inches(1.65)
                         left = Inches(8)
                         width = Inches(4.5)
@@ -629,13 +694,13 @@ class Reportwriter:
                             "",
                             evidence["friendly_name"],
                         )
-                        self.make_figure(p, ref_name)
+                        self._make_figure(p, ref_name)
                         run = p.add_run(self.prefix_figure + evidence["caption"])
             elif extension in self.image_extensions:
                 # Drop in the image at the full 6.5" width and add the caption
                 if self.report_type == "pptx":
                     if par:
-                        self.delete_paragraph(par)
+                        self._delete_paragraph(par)
                     # Place new textbox to the mid-right
                     top = Inches(1.65)
                     left = Inches(8)
@@ -651,7 +716,7 @@ class Reportwriter:
                         run.add_picture(file_path, width=Inches(6.5))
                     except docx.image.exceptions.UnrecognizedImageError:
                         logger.exception(
-                            "Evidence file known as %s (%s) was not reognized as a %s file.",
+                            "Evidence file known as %s (%s) was not recognized as a %s file.",
                             evidence["friendly_name"],
                             file_path,
                             extension,
@@ -696,7 +761,7 @@ class Reportwriter:
                     # Create the caption for the image
                     p = self.sacrificial_doc.add_paragraph(style="Caption")
                     ref_name = re.sub("[^A-Za-z0-9]+", "", evidence["friendly_name"])
-                    self.make_figure(p, ref_name)
+                    self._make_figure(p, ref_name)
                     run = p.add_run(self.prefix_figure + evidence["caption"])
             # Skip unapproved files
             else:
@@ -704,7 +769,7 @@ class Reportwriter:
         else:
             raise FileNotFoundError(file_path)
 
-    def delete_paragraph(self, par):
+    def _delete_paragraph(self, par):
         """
         Delete the specified paragraph.
 
@@ -715,9 +780,12 @@ class Reportwriter:
         """
         p = par._p
         parent_element = p.getparent()
-        parent_element.remove(p)
+        if parent_element is not None:
+            parent_element.remove(p)
+        else:
+            logger.warning("Could not delete paragraph in because it had no parent element")
 
-    def write_xml(self, text, par, styles):
+    def _write_xml(self, text, par, styles):
         """
         Write the provided text to Office XML.
 
@@ -815,7 +883,7 @@ class Reportwriter:
             else:
                 font.superscript = styles["superscript"]
 
-    def replace_and_write(
+    def _replace_and_write(
         self, text, par, finding, styles=ReportConstants.DEFAULT_STYLE_VALUES.copy()
     ):
         """
@@ -865,11 +933,8 @@ class Reportwriter:
         cross_refs = []
         if match:
             for var in match:
-                logger.debug("Processing a potential template expression: %s", var)
-
                 # Check for and track cross-references separately for later action
                 if var.startswith("ref "):
-                    logger.debug("Tracking a cross-reference: %s", var)
                     # Track reference with the curly braces restored for later
                     cross_refs.append("{{.%s}}" % var)
                 # Process anything that is not a cross-reference now in the match loop
@@ -890,9 +955,9 @@ class Reportwriter:
                         else:
                             par.style = "Caption"
                             if ref_name:
-                                self.make_figure(par, ref_name)
+                                self._make_figure(par, ref_name)
                             else:
-                                self.make_figure(par)
+                                self._make_figure(par)
                             par.add_run(self.prefix_figure + text)
                         # Captions are on their own line so return
                         return par
@@ -914,14 +979,14 @@ class Reportwriter:
                             )
                             for ev in finding["evidence"]:
                                 if ev["friendly_name"] == keyword:
-                                    self.process_evidence(ev, par)
+                                    self._process_evidence(ev, par)
                                     return par
                         else:
-                            self.write_xml(text, par, styles)
+                            self._write_xml(text, par, styles)
                     else:
-                        self.write_xml(text, par, styles)
+                        self._write_xml(text, par, styles)
         else:
-            self.write_xml(text, par, styles)
+            self._write_xml(text, par, styles)
 
         # Transform any cross-references into bookmarks
         if cross_refs:
@@ -940,17 +1005,17 @@ class Reportwriter:
                         font = run.font
                         font.italic = True
                     else:
-                        self.make_cross_ref(
+                        self._make_cross_ref(
                             par,
                             ref_name,
                         )
                 else:
-                    self.write_xml(part, par, styles)
+                    self._write_xml(part, par, styles)
             # return par
 
         return par
 
-    def process_nested_tags(self, contents, par, finding, styles=None):
+    def _process_nested_html_tags(self, contents, par, finding, styles=None):
         """
         Process BeautifulSoup4 ``Tag`` objects containing nested HTML tags.
 
@@ -988,13 +1053,13 @@ class Reportwriter:
 
             # These tags apply italic, bold, and underline styles but appear rarely
             elif tag_name == "em":
-                styles_dict["italic_font"] = True
+                styles_dict["italic"] = True
             elif tag_name in ("strong", "b"):
                 styles_dict["bold"] = True
             elif tag_name == "u":
                 styles_dict["underline"] = True
 
-            # The ``sub`` and ``sup`` tags desingates subscript and superscript
+            # The ``sub`` and ``sup`` tags designates subscript and superscript
             elif tag_name == "sub":
                 styles_dict["subscript"] = True
             elif tag_name == "sup":
@@ -1021,7 +1086,7 @@ class Reportwriter:
 
                 # Check existence of supported character styles
                 if "style" in tag.attrs:
-                    tag_style = self.get_styles(tag)
+                    tag_style = self._get_styles(tag)
                     if "font-size" in tag_style:
                         styles_dict["font_size"] = tag_style["font-size"]
                     if "font-family" in tag_style:
@@ -1045,9 +1110,9 @@ class Reportwriter:
 
             return styles_dict
 
-        # Begin with HTML that could have infinitely nested tags
+        # Begin with HTML that could have indefinitely nested tags
         for part in contents:
-            # Track the styles for this first parent tag
+            # Track the styles for this first parent tag or use the defaults if none
             if styles:
                 parent_styles = styles.copy()
                 run_styles = styles.copy()
@@ -1061,7 +1126,7 @@ class Reportwriter:
 
             # Get the top-level's styles first as it applies to all future runs
             if part_name:
-                # Update styles base don the tag and properties
+                # Update styles based on the tag and properties
                 parent_styles = check_tags(part, parent_styles)
 
                 # Split part into list of text and ``Tag`` objects
@@ -1072,38 +1137,30 @@ class Reportwriter:
                     tag_name = tag.name
 
                     if tag_name and tag_name in self.tag_allowlist:
-                        # Split part into list of text and ``Tag`` objects
-                        tag_contents = tag.contents
-
                         # Construct text to be written as part of this run
                         content_text = ""
 
-                        # This is a special check for a hyperlink formatted with additional styles
-                        if len(tag_contents) > 0:
+                        # Split part into list of text and ``Tag`` objects
+                        tag_contents = tag.contents
+
+                        if len(tag_contents) >= 1:
+                            # Update styles based on the tag and properties
+                            run_styles = check_tags(tag, run_styles)
+
+                            # Check for a hyperlink formatted with additional styles
                             if tag_contents[0].name:
                                 if tag_contents[0].name == "a":
                                     run_styles["hyperlink"] = True
                                     run_styles["hyperlink_url"] = tag_contents[0]["href"]
                                     content_text = tag_contents[0].text
-                        # No hyperlink, so try to assemble the text for this run
-                        else:
-                            # Only try to join if there is one item (no nested tags)
-                            if len(tag_contents) == 1:
-                                content_text = " ".join(tag_contents)
 
-                        # Update styles base don the tag and properties
-                        run_styles = check_tags(tag, run_styles)
-
-                        # Check if there are more nested tags within this object
-                        if len(tag_contents) > 1:
                             # Combine the styles to carry them over to the next loop
                             merged_styles = merge_styles(run_styles, parent_styles)
 
                             # Recursively process the nested tags
-                            self.process_nested_tags(
+                            self._process_nested_html_tags(
                                 tag_contents, par, finding, styles=merged_styles
                             )
-
                     elif tag_name:
                         logger.warning(
                             "Ignoring a nested HTML tag not in the allowlist: %s",
@@ -1117,7 +1174,7 @@ class Reportwriter:
                     merged_styles = merge_styles(run_styles, parent_styles)
 
                     # Write the text for this run
-                    par = self.replace_and_write(
+                    par = self._replace_and_write(
                         content_text, par, finding, merged_styles
                     )
 
@@ -1127,12 +1184,12 @@ class Reportwriter:
             # There are no tags to process, so write the string
             else:
                 if isinstance(part, NavigableString):
-                    par = self.replace_and_write(part, par, finding)
+                    par = self._replace_and_write(part, par, finding, parent_styles)
                 else:
-                    par = self.replace_and_write(part.text, par, finding)
+                    par = self._replace_and_write(part.text, par, finding)
         return par
 
-    def create_list_paragraph(
+    def _create_list_paragraph(
         self, prev_p, level, num=False, alignment=WD_ALIGN_PARAGRAPH.LEFT
     ):
         """
@@ -1167,11 +1224,77 @@ class Reportwriter:
                     make_list = False
             p = self.sacrificial_doc.add_paragraph(style=list_style)
             if make_list:
-                p = self.list_number(p, prev=prev_p, level=level, num=num)
+                p = self._list_number(p, prev=prev_p, level=level, num=num)
             p.alignment = alignment
         return p
 
-    def parse_nested_html_lists(self, tag, prev_p, num, finding, level=0):
+    def _parse_nested_html_lists(self, tag, prev_p, num, finding, level=0):
+        """
+        Recursively parse deeply nested lists. This checks for ``<ol>`` or ``<ul>`` tags
+        and keeps parsing until all nested lists are found and processed.
+
+        Returns the last paragraph object created.
+
+        **Parameters**
+
+        ``part``
+            BeautifulSoup 4 Tag object to parse
+        ``prev_p``
+            Previous paragraph to link the next list item
+        ``num``
+            Boolean to determine if the line item will be numbered
+        ``finding``
+            Report finding currently being processed
+        ``level``
+            Indentation level for the list item (Defaults to 0)
+        """
+        # Check if this element has any ``ul`` or ``ol`` tags anywhere in its contents
+        if tag.ol or tag.ul:
+            temp = []
+            nested_list = None
+            li_contents = tag.contents
+            # Loop over the contents of the list item to find the nested lists
+            for part in tag:
+                # Newlines will appear between elements, ignore them
+                if part != "\n":
+                    # If the tag name is ``ul`` or ``ol``, tack it as a nested list
+                    if part.name in ("ol", "ul"):
+                        num = bool(part.name == "ol")
+                        nested_list = part
+                    # Put everything else in a temporary list to be processed later
+                    else:
+                        temp.append(part)
+
+            # Make the list paragraph here to pick up any changes to the list style (e.g, ``num``)
+            p = self._create_list_paragraph(prev_p, level, num)
+
+            # If ``temp`` isn't empty, process it like any other line
+            if temp:
+                # A length of ``1`` means no nested tags
+                if len(temp) == 1:
+                    # If the first list item is a ``Tag`` process for styling
+                    if temp[0].name:
+                        self._process_nested_html_tags(temp, p, finding)
+                    # Otherwise, just write the XML
+                    else:
+                        self._replace_and_write(temp[0], p, finding)
+                else:
+                    self._process_nested_html_tags(temp, p, finding)
+
+            # If we have nested list(s), recursively process them by re-entering ``_parse_html_lists``
+            if nested_list:
+                # Increment the indentation level
+                if not li_contents[0] == "\n":
+                    level += 1
+                p = self._parse_html_lists(nested_list, p, num, finding, level)
+        # No nested list items, proceed as normal
+        # This is where we catch ``li`` tags with nested tags like hyperlinks
+        else:
+            p = self._create_list_paragraph(prev_p, level, num)
+            self._process_nested_html_tags(tag.contents, p, finding)
+        return p
+
+    def _parse_html_lists(self, tag, prev_p, num, finding, level=0):
         """
         Recursively parse deeply nested lists. This checks for ``<ol>`` or ``<ul>`` tags
         and keeps parsing until all nested lists are found and processed.
@@ -1191,79 +1314,51 @@ class Reportwriter:
         ``level``
             Indentation level for the list item (Defaults to 0)
         """
-        p = prev_p
+        # Get the individuals contents of the tag
         contents = tag.contents
+        # Loop over the contents to find nested lists
+        # Nested lists are ``ol`` or ``ul`` tags inside ``li`` tags
         for part in contents:
+            # Handle ``li`` tags which might contain more lists
             if part.name == "li":
                 li_contents = part.contents
                 # A length of ``1`` means there are no nested tags
                 if len(li_contents) == 1:
-                    p = self.create_list_paragraph(prev_p, level, num)
+                    p = self._create_list_paragraph(prev_p, level, num)
                     if li_contents[0].name:
-                        self.process_nested_tags(li_contents, p, finding)
+                        self._process_nested_html_tags(li_contents, p, finding)
                     else:
-                        self.replace_and_write(part.text, p, finding)
+                        self._replace_and_write(part.text, p, finding)
                 # Bigger lists mean more tags, so process nested tags
                 else:
-                    # Check if this part has any ``ul`` or ``ol`` tags
-                    if part.ol or part.ul:
-                        # Get everything between the ``<li>`` and the next nested ``<ol>`` or ``<ul>``
-                        temp = []
-                        nested_list = None
-                        for sub_part in part:
-                            # Add everything NOT a nested list to ``temp``
-                            # This holds text and nested tags that come before the first list tag
-                            if not sub_part.name == "ol" and not sub_part.name == "ul":
-                                if sub_part != "\n":
-                                    temp.append(sub_part)
-                            elif sub_part.name in ("ol", "ul"):
-                                if sub_part != "\n":
-                                    nested_list = sub_part
-                        # If ``temp`` isn't empty, process it like any other line
-                        if temp:
-                            p = self.create_list_paragraph(prev_p, level, num)
-                            if len(temp) == 1:
-                                if temp[0].name:
-                                    self.process_nested_tags(temp, p, finding)
-                                else:
-                                    self.replace_and_write(temp[0], p, finding)
-                            else:
-                                self.process_nested_tags(temp, p, finding)
-                        # Recursively process this list and any other nested lists inside of it
-                        if nested_list:
-                            # Increment the list level counter for this nested list
-                            level += 1
-                            p = self.parse_nested_html_lists(
-                                nested_list, p, num, finding, level
-                            )
-                    else:
-                        p = self.create_list_paragraph(prev_p, level, num)
-                        self.process_nested_tags(part.contents, p, finding)
+                    # Handle nested lists
+                    p = self._parse_nested_html_lists(part, prev_p, num, finding, level)
+                # Track the paragraph used for this list item to link subsequent list paragraphs
                 prev_p = p
             # If ``ol`` tag encountered, increment ``level`` and switch to numbered list
             elif part.name == "ol":
                 level += 1
-                p = self.parse_nested_html_lists(part, prev_p, num, finding, level)
+                p = self._parse_html_lists(part, prev_p, True, finding, level)
             # If ``ul`` tag encountered, increment ``level`` and switch to bulleted list
             elif part.name == "ul":
                 level += 1
-                p = self.parse_nested_html_lists(part, prev_p, num, finding, level)
+                p = self._parse_html_lists(part, prev_p, False, finding, level)
             # No change in list type, so proceed with writing the line
             elif part.name:
-                p = self.create_list_paragraph(prev_p, level, num)
-                self.process_nested_tags(part, p, finding)
+                p = self._create_list_paragraph(prev_p, level, num)
+                self._process_nested_html_tags(part, p, finding)
+            # Handle tags that are not handled above
             else:
                 if not isinstance(part, NavigableString):
                     logger.warning("Encountered an unknown tag for a list: %s", part.name)
                 else:
                     if part.strip() != "":
-                        p = self.create_list_paragraph(prev_p, level, num)
-                        self.replace_and_write(part.strip(), p, finding)
-
+                        p = self._create_list_paragraph(prev_p, level, num)
+                        self._replace_and_write(part.strip(), p, finding)
         # Return last paragraph created
         return p
 
-    def process_text_xml(self, text, finding=None):
+    def _process_text_xml(self, text, finding=None):
         """
         Process the provided text from the specified finding to parse keywords for
         evidence placement and formatting for Office XML.
@@ -1275,11 +1370,9 @@ class Reportwriter:
         ``finding``
             Current report finding being processed
         """
-        prev_p = None
-
         if text:
             # Clean text to make it XML compatible for Office XML
-            text = "".join(c for c in text if self.valid_xml_char_ordinal(c))
+            text = "".join(c for c in text if self._valid_xml_char_ordinal(c))
 
             # Parse the HTML into a BS4 soup object
             soup = BeautifulSoup(text, "lxml")
@@ -1335,7 +1428,7 @@ class Reportwriter:
                             p.alignment = ALIGNMENT.JUSTIFY
 
                     # Pass the contents and new paragraph on to drill down into nested formatting
-                    self.process_nested_tags(contents, p, finding)
+                    self._process_nested_html_tags(contents, p, finding)
 
                 # PRE – Code Blocks
                 elif tag_name == "pre":
@@ -1383,92 +1476,29 @@ class Reportwriter:
                 # OL & UL – Ordered/Numbered & Unordered Lists
                 elif tag_name in ("ol", "ul"):
                     # Ordered/numbered lists need numbers and linked paragraphs
-                    p = None
                     prev_p = None
                     num = bool(tag_name == "ol")
-
                     # In HTML, sub-items in a list are nested HTML lists
                     # We need to check every list item for formatted and additional lists
                     # While tracking which level of the list we are working with
+                    level = 0
+                    prev_p = self._parse_html_lists(tag, prev_p, num, finding, level)
+
+                # BLOCKQUOTE – Blockquote Sections
+                elif tag_name == "blockquote":
+                    # Get the tag's contents to check for additional formatting
                     contents = tag.contents
-                    for part in contents:
-                        # Reset list indentation level for each loop
-                        level = 0
-                        # Check if the tag is a list item, ``<li>``
-                        if part.name == "li":
-                            # A list length of ``1`` means no other tags to process
-                            li_contents = part.contents
-                            if len(li_contents) == 1:
-                                # Create the paragraph for this list item
-                                p = self.create_list_paragraph(prev_p, level, num)
-                                if li_contents[0].name:
-                                    p = self.process_nested_tags(li_contents, p, finding)
-                                else:
-                                    p = self.replace_and_write(part.text, p, finding)
-                            # Bigger lists mean more tags, so process nested tags
-                            else:
-                                # Check if this part has any ``ul`` or ``ol`` tags
-                                if part.ol or part.ul:
-                                    # Get everything between the ``<li>`` and the first nested ``<ol>`` or ``<ul>``
-                                    temp = []
-                                    nested_list = None
 
-                                    for sub_part in part:
-                                        # Add everything NOT a nested list to temp
-                                        # This holds text and nested tags that come before the first list tag
-                                        if (
-                                            not sub_part.name == "ol"
-                                            and not sub_part.name == "ul"
-                                        ):
-                                            if sub_part != "\n":
-                                                temp.append(sub_part)
-                                        # Hold the nested list separately for later
-                                        elif sub_part.name in ("ol", "ul"):
-                                            if sub_part != "\n":
-                                                nested_list = sub_part
+                    # PowerPoint lacks a blockquote style, so we just add a basic paragraph
+                    if self.report_type == "pptx":
+                        p = self.finding_body_shape.text_frame.add_paragraph()
+                        ALIGNMENT = PP_ALIGN
+                    else:
+                        p = self.sacrificial_doc.add_paragraph()
+                        p.style = "Blockquote"
 
-                                    # If ``temp`` isn't empty, process it like any other line
-                                    if temp:
-                                        p = self.create_list_paragraph(prev_p, level, num)
-                                        # Again, length of ``1`` means no nested tags
-                                        if len(temp) == 1:
-                                            # If the first list item is a ``Tag`` process for styling
-                                            if temp[0].name:
-                                                p = self.process_nested_tags(
-                                                    temp, p, finding
-                                                )
-                                            # Otherwise, just write the XML
-                                            else:
-                                                p = self.replace_and_write(
-                                                    temp[0], p, finding
-                                                )
-                                        else:
-                                            p = self.process_nested_tags(temp, p, finding)
-
-                                    # Recursively process this list and any other nested lists inside of it
-                                    if nested_list:
-                                        # Increment the list level counter for this nested list
-                                        if not li_contents[0] == "\n":
-                                            level += 1
-                                        p = self.parse_nested_html_lists(
-                                            nested_list, p, num, finding, level
-                                        )
-
-                                # No nested list, proceed as normal
-                                else:
-                                    p = self.create_list_paragraph(prev_p, level, num)
-                                    p = self.process_nested_tags(
-                                        part.contents, p, finding
-                                    )
-
-                            # Track the paragraph used for this list item to link subsequent list paragraphs
-                            prev_p = p
-                        else:
-                            if not isinstance(part, NavigableString):
-                                logger.warning(
-                                    "Encountered an unknown tag inside of an ordered list: %s",
-                                    part.name,
-                                )
+                    # Pass the contents and new paragraph on to drill down into nested formatting
+                    self._process_nested_html_tags(contents, p, finding)
                 else:
                     if not isinstance(tag, NavigableString):
                         logger.warning(
@@ -1522,9 +1552,9 @@ class Reportwriter:
             codeinline_style.quick_style = True
             codeinline_style.priority = 3
             # Set font and size
-            codeblock_font = codeinline_style.font
-            codeblock_font.name = "Courier New"
-            codeblock_font.size = Pt(11)
+            codeinline_font = codeinline_style.font
+            codeinline_font.name = "Courier New"
+            codeinline_font.size = Pt(11)
 
         if "Caption" not in styles:
             caption_style = styles.add_style("Caption", WD_STYLE_TYPE.PARAGRAPH)
@@ -1537,8 +1567,27 @@ class Reportwriter:
             caption_font.size = Pt(9)
             caption_font.italic = True
 
+        if "Blockquote" not in styles:
+            block_style = styles.add_style("Blockquote", WD_STYLE_TYPE.PARAGRAPH)
+            block_style.base_style = styles["Normal"]
+            block_style.hidden = False
+            block_style.quick_style = True
+            block_style.priority = 5
+            # Set font and size
+            block_font = block_style.font
+            block_font.name = "Calibri"
+            block_font.size = Pt(12)
+            block_font.italic = True
+            # Set alignment
+            block_par = block_style.paragraph_format
+            block_par.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            block_par.left_indent = Inches(0.2)
+            block_par.right_indent = Inches(0.2)
+            # Keep first and last lines together after repagination
+            block_par.widow_control = True
+
         # Process template context, converting HTML elements to XML as needed
-        context = self.process_richtext(self.report_json)
+        context = self._process_richtext(self.report_json)
 
         # Render the Word document + auto-escape any unsafe XML/HTML
         self.word_doc.render(context, self.jinja_env, autoescape=True)
@@ -1546,7 +1595,7 @@ class Reportwriter:
         # Return the final rendered document
         return self.word_doc
 
-    def process_richtext(self, context: dict) -> dict:
+    def _process_richtext(self, context: dict) -> dict:
         """
         Update the document context with ``RichText`` and ``Subdocument`` objects for
         each finding and any other values editable with a WYSIWYG editor.
@@ -1560,7 +1609,7 @@ class Reportwriter:
         def render_subdocument(section, finding):
             if section:
                 self.sacrificial_doc = self.word_doc.new_subdoc()
-                self.process_text_xml(section, finding)
+                self._process_text_xml(section, finding)
                 return self.sacrificial_doc
             return None
 
@@ -1570,6 +1619,12 @@ class Reportwriter:
             # Create ``RichText()`` object for a colored severity category
             finding["severity_rt"] = RichText(
                 finding["severity"], color=finding["severity_color"]
+            )
+            finding["cvss_score_rt"] = RichText(
+                finding["cvss_score"], color=finding["severity_color"]
+            )
+            finding["cvss_vector_rt"] = RichText(
+                finding["cvss_vector"], color=finding["severity_color"]
             )
             # Create subdocuments for each finding section
             finding["affected_entities_rt"] = render_subdocument(
@@ -1596,6 +1651,29 @@ class Reportwriter:
             )
             finding["references_rt"] = render_subdocument(finding["references"], finding)
 
+        # Client Notes
+        context["client"]["note_rt"] = render_subdocument(context["client"]["note"], finding=None)
+        context["client"]["address_rt"] = render_subdocument(context["client"]["address"], finding=None)
+
+        # Project Notes
+        context["project"]["note_rt"] = render_subdocument(context["project"]["note"], finding=None)
+
+        # Assignments
+        for assignment in context["team"]:
+            if isinstance(assignment, dict):
+                if assignment["note"]:
+                    assignment["note_rt"] = render_subdocument(
+                        assignment["note"], finding=None
+                    )
+
+        # Contacts
+        for contact in context["client"]["contacts"]:
+            if isinstance(contact, dict):
+                if contact["note"]:
+                    contact["note_rt"] = render_subdocument(
+                        contact["note"], finding=None
+                    )
+
         # Objectives
         for objective in context["objectives"]:
             if isinstance(objective, dict):
@@ -1618,9 +1696,28 @@ class Reportwriter:
                 if target["note"]:
                     target["note_rt"] = render_subdocument(target["note"], finding=None)
 
+        # Deconfliction Events
+        for event in context["deconflictions"]:
+            if isinstance(event, dict):
+                if event["description"]:
+                    event["description_rt"] = render_subdocument(event["description"], finding=None)
+
+        # White Cards
+        for card in context["whitecards"]:
+            if isinstance(card, dict):
+                if card["description"]:
+                    card["description_rt"] = render_subdocument(card["description"], finding=None)
+
+        # Infrastructure
+        for asset_type in context["infrastructure"]:
+            for asset in context["infrastructure"][asset_type]:
+                if isinstance(asset, dict):
+                    if asset["note"]:
+                        asset["note_rt"] = render_subdocument(asset["note"], finding=None)
+
         return context
 
-    def process_text_xlsx(self, html, text_format, finding):
+    def _process_text_xlsx(self, html, text_format, finding):
         """
         Process the provided text from the specified finding to parse keywords for
         evidence placement and formatting in xlsx documents.
@@ -1638,7 +1735,10 @@ class Reportwriter:
         keyword_regex = r"\{\{\.(.*?)\}\}"
 
         # Strip out all HTML tags because we can't format text runs for XLSX
-        text = BeautifulSoup(html, "lxml").text
+        if html:
+            text = BeautifulSoup(html, "lxml").text
+        else:
+            text = ""
 
         # Perform the necessary replacements
         if "{{.client}}" in text:
@@ -1764,7 +1864,7 @@ class Reportwriter:
 
             # Affected Entities
             if finding["affected_entities"]:
-                self.process_text_xlsx(
+                self._process_text_xlsx(
                     finding["affected_entities"], asset_format, finding
                 )
             else:
@@ -1772,33 +1872,33 @@ class Reportwriter:
             self.col += 1
 
             # Description
-            self.process_text_xlsx(finding["description"], wrap_format, finding)
+            self._process_text_xlsx(finding["description"], wrap_format, finding)
             self.col += 1
 
             # Impact
-            self.process_text_xlsx(finding["impact"], wrap_format, finding)
+            self._process_text_xlsx(finding["impact"], wrap_format, finding)
             self.col += 1
 
             # Recommendation
-            self.process_text_xlsx(finding["recommendation"], wrap_format, finding)
+            self._process_text_xlsx(finding["recommendation"], wrap_format, finding)
             self.col += 1
 
             # Replication
-            self.process_text_xlsx(finding["replication_steps"], wrap_format, finding)
+            self._process_text_xlsx(finding["replication_steps"], wrap_format, finding)
             self.col += 1
 
             # Detection
-            self.process_text_xlsx(
+            self._process_text_xlsx(
                 finding["host_detection_techniques"], wrap_format, finding
             )
             self.col += 1
-            self.process_text_xlsx(
+            self._process_text_xlsx(
                 finding["network_detection_techniques"], wrap_format, finding
             )
             self.col += 1
 
             # References
-            self.process_text_xlsx(finding["references"], wrap_format, finding)
+            self._process_text_xlsx(finding["references"], wrap_format, finding)
             self.col += 1
 
             # Collect the evidence, if any, from the finding's folder and insert inline with description
@@ -2012,20 +2112,20 @@ class Reportwriter:
             if self.finding_body_shape.has_text_frame:
                 text_frame = get_textframe(self.finding_body_shape)
                 text_frame.clear()
-                self.delete_paragraph(text_frame.paragraphs[0])
+                self._delete_paragraph(text_frame.paragraphs[0])
 
             # Set slide title to title + [severity]
             title_shape.text = f'{finding["title"]} [{finding["severity"]}]'
 
             # Add description to the slide body (other sections will appear in the notes)
             if finding["description"]:
-                self.process_text_xml(finding["description"], finding)
+                self._process_text_xml(finding["description"], finding)
             else:
-                self.process_text_xml("<p>No description provided</p>", finding)
+                self._process_text_xml("<p>No description provided</p>", finding)
 
             if "evidence" in finding:
                 for ev in finding["evidence"]:
-                    self.process_evidence(ev, par=None)
+                    self._process_evidence(ev, par=None)
 
             def prepare_for_pptx(value):
                 """Strip HTML and clear 0x0D characters to prepare text for notes slides."""
@@ -2125,7 +2225,7 @@ class Reportwriter:
 
     def generate_all_reports(self, docx_template, pptx_template):
         """
-        Generate all availabe report types and return memory streams for each file.
+        Generate all available report types and return memory streams for each file.
         """
         # Generate the JSON report - it just needs to be a string object
         self.report_json = json.loads(self.generate_json())
@@ -2193,6 +2293,10 @@ class TemplateLinter:
                         results["warnings"].append(
                             "Template is missing a recommended style (see documentation): List Paragraph"
                         )
+                    if "Blockquote" not in document_styles:
+                        results["warnings"].append(
+                            "Template is missing a recommended style (see documentation): Blockquote"
+                        )
                     logger.info("Completed Word style checks")
 
                     # Step 3: Test rendering the document
@@ -2220,6 +2324,24 @@ class TemplateLinter:
                         results = {
                             "result": "failed",
                             "errors": [f"Jinja2 template syntax error: {error.message}"],
+                        }
+                    except InvalidFilterValue as error:
+                        logger.error("Invalid value provided to filter: %s", error)
+                        results = {
+                            "result": "failed",
+                            "errors": [f"Invalid filter value: {error.message}"],
+                        }
+                    except TypeError as error:
+                        logger.error("Invalid value provided to filter or expression: %s", error)
+                        results = {
+                            "result": "failed",
+                            "errors": [f"Invalid value provided to filter or expression: {error}"],
+                        }
+                    except TemplateRuntimeError as error:
+                        logger.error("Invalid filter or expression: %s", error)
+                        results = {
+                            "result": "failed",
+                            "errors": [f"Invalid filter or expression: {error}"],
                         }
                 except Exception:
                     logger.exception("Template failed rendering")
@@ -2266,6 +2388,18 @@ class TemplateLinter:
                     results = {
                         "result": "failed",
                         "errors": ["Template file is not a PowerPoint presentation"],
+                    }
+                except TypeError as error:
+                    logger.error("Invalid value provided to filter or expression: %s", error)
+                    results = {
+                        "result": "failed",
+                        "errors": [f"Invalid value provided to filter or expression: {error}"],
+                    }
+                except TemplateRuntimeError as error:
+                    logger.error("Invalid filter or expression: %s", error)
+                    results = {
+                        "result": "failed",
+                        "errors": [f"Invalid filter or expression: {error}"],
                     }
                 except Exception:
                     logger.exception("Template failed rendering")

@@ -3,14 +3,19 @@
 # Django Imports
 from django.contrib import admin
 
-from .models import (
+# Ghostwriter Libraries
+from ghostwriter.rolodex.models import (
     Client,
     ClientContact,
+    ClientInvite,
     ClientNote,
+    Deconfliction,
+    DeconflictionStatus,
     ObjectivePriority,
     ObjectiveStatus,
     Project,
     ProjectAssignment,
+    ProjectInvite,
     ProjectNote,
     ProjectObjective,
     ProjectRole,
@@ -18,6 +23,7 @@ from .models import (
     ProjectSubTask,
     ProjectTarget,
     ProjectType,
+    WhiteCard,
 )
 
 
@@ -148,3 +154,57 @@ class ProjectSubTaskAdmin(admin.ModelAdmin):
 class ObjectivePriorityAdmin(admin.ModelAdmin):
     list_display = ("priority", "weight")
     list_display_links = ("priority",)
+
+
+@admin.register(ProjectInvite)
+class ProjectInviteAdmin(admin.ModelAdmin):
+    list_display = ("project", "user")
+    list_filter = ("project", "user")
+    list_display_links = ("project", "user")
+    fieldsets = (
+        ("Invitation", {"fields": ("user", "project")}),
+        ("Misc", {"fields": ("comment",)}),
+    )
+
+
+@admin.register(ClientInvite)
+class ClientInviteAdmin(admin.ModelAdmin):
+    list_display = ("client", "user")
+    list_filter = ("client", "user")
+    list_display_links = ("client", "user")
+    fieldsets = (
+        ("Invitation", {"fields": ("user", "client")}),
+        ("Misc", {"fields": ("comment",)}),
+    )
+
+
+@admin.register(DeconflictionStatus)
+class DeconflictionStatusAdmin(admin.ModelAdmin):
+    pass
+
+
+@admin.register(Deconfliction)
+class DeconflictionAdmin(admin.ModelAdmin):
+    list_display = ("project", "status", "title")
+    list_filter = ("project", "status")
+    list_display_links = ("project", "status", "title")
+    fieldsets = (
+        (
+            "Deconfliction",
+            {"fields": ("status", "title", "description", "alert_source", "project")},
+        ),
+        ("Timestamps", {"fields": ("report_timestamp", "alert_timestamp", "response_timestamp",)}),
+    )
+
+
+@admin.register(WhiteCard)
+class WhiteCardAdmin(admin.ModelAdmin):
+    list_display = ("project", "title")
+    list_filter = ["project__complete", ]
+    list_display_links = ("project", "title")
+    fieldsets = (
+        (
+            "White Card",
+            {"fields": ("issued", "title", "description")},
+        ),
+    )

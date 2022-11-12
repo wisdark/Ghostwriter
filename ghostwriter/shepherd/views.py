@@ -10,12 +10,12 @@ from datetime import date, datetime
 from django import forms
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core import serializers
 from django.db import transaction
 from django.db.models import Q
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse, reverse_lazy
 from django.utils.translation import gettext_lazy as _
@@ -106,7 +106,9 @@ def ajax_load_projects(request):
     :template:`shepherd/project_dropdown_list.html`
     """
     client_id = request.GET.get("client")
-    projects = Project.objects.filter(client_id=client_id).order_by("codename")
+    projects = Project.objects.filter(
+        Q(client_id=client_id) & Q(complete=False)
+    ).order_by("codename")
 
     return render(request, "shepherd/project_dropdown_list.html", {"projects": projects})
 
@@ -216,7 +218,7 @@ class DomainRelease(LoginRequiredMixin, SingleObjectMixin, View):
                             namecheap_config=namecheap_config,
                             domain=domain_instance,
                             group="Individual Domain Update",
-                            hook="ghostwriter.shepherd.tasks.send_slack_complete_msg",
+                            hook="ghostwriter.modules.notifications_slack.send_slack_complete_msg",
                         )
         else:
             data = {
@@ -285,15 +287,15 @@ class DomainUpdateHealth(LoginRequiredMixin, View):
             if self.domain:
                 task_id = async_task(
                     "ghostwriter.shepherd.tasks.check_domains",
-                    domain_id=self.domain.id,
                     group="Individual Domain Update",
-                    hook="ghostwriter.shepherd.tasks.send_slack_complete_msg",
+                    hook="ghostwriter.modules.notifications_slack.send_slack_complete_msg",
+                    domain_id=self.domain.id,
                 )
             else:
                 task_id = async_task(
                     "ghostwriter.shepherd.tasks.check_domains",
                     group="Domain Updates",
-                    hook="ghostwriter.shepherd.tasks.send_slack_complete_msg",
+                    hook="ghostwriter.modules.notifications_slack.send_slack_complete_msg",
                 )
             message = "Successfully queued domain category update task (Task ID {task}) ".format(
                 task=task_id
@@ -332,15 +334,15 @@ class DomainUpdateDNS(LoginRequiredMixin, View):
             if self.domain:
                 task_id = async_task(
                     "ghostwriter.shepherd.tasks.update_dns",
-                    domain=self.domain.id,
+                    hook="ghostwriter.modules.notifications_slack.send_slack_complete_msg",
                     group="Individual DNS Update",
-                    hook="ghostwriter.shepherd.tasks.send_slack_complete_msg",
+                    domain=self.domain.id,
                 )
             else:
                 task_id = async_task(
                     "ghostwriter.shepherd.tasks.update_dns",
                     group="DNS Updates",
-                    hook="ghostwriter.shepherd.tasks.send_slack_complete_msg",
+                    hook="ghostwriter.modules.notifications_slack.send_slack_complete_msg",
                 )
             message = "Successfully queued DNS update task (Task ID {task})".format(
                 task=task_id
@@ -348,6 +350,7 @@ class DomainUpdateDNS(LoginRequiredMixin, View):
         except Exception:
             result = "error"
             message = "DNS update task could not be queued"
+            logger.exception(message)
 
         data = {
             "result": result,
@@ -415,12 +418,20 @@ class MonitorCloudInfrastructure(LoginRequiredMixin, View):
         return JsonResponse(data)
 
 
-class ServerNoteDelete(LoginRequiredMixin, SingleObjectMixin, View):
+class ServerNoteDelete(LoginRequiredMixin, SingleObjectMixin, UserPassesTestMixin, View):
     """
     Delete an individual :model:`shepherd.ServerNote`.
     """
 
     model = ServerNote
+
+    def test_func(self):
+        self.object = self.get_object()
+        return self.object.operator.id == self.request.user.id
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that")
+        return redirect("home:dashboard")
 
     def post(self, *args, **kwargs):
         self.object = self.get_object()
@@ -435,12 +446,20 @@ class ServerNoteDelete(LoginRequiredMixin, SingleObjectMixin, View):
         return JsonResponse(data)
 
 
-class DomainNoteDelete(LoginRequiredMixin, SingleObjectMixin, View):
+class DomainNoteDelete(LoginRequiredMixin, SingleObjectMixin, UserPassesTestMixin, View):
     """
     Delete an individual :model:`shepherd.DomainNote`.
     """
 
     model = DomainNote
+
+    def test_func(self):
+        self.object = self.get_object()
+        return self.object.operator.id == self.request.user.id
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that")
+        return redirect("home:dashboard")
 
     def post(self, *args, **kwargs):
         self.object = self.get_object()
@@ -539,7 +558,9 @@ def domain_list(request):
             Domain.objects.select_related(
                 "domain_status", "whois_status", "health_status"
             )
-            .filter(Q(name__icontains=search_term) | Q(categorization__icontains=search_term))
+            .filter(
+                Q(name__icontains=search_term) | Q(categorization__icontains=search_term)
+            )
             .order_by("name")
         )
     else:
@@ -548,9 +569,10 @@ def domain_list(request):
         ).all()
     # Copy the GET request data
     data = request.GET.copy()
-    # If user has not submitted their own filter, default to showing only Available domains
+    # If user has not submitted a filter, default showing Available domains with expiry dates in the future
     if len(data) == 0:
         data["domain_status"] = 1
+        data["exclude_expired"] = True
     domains_filter = DomainFilter(data, queryset=domains_list)
     return render(request, "shepherd/domain_list.html", {"filter": domains_filter})
 
@@ -1010,7 +1032,7 @@ def export_domains_to_csv(request):
     domain_resource = DomainResource()
     dataset = domain_resource.export()
     response = HttpResponse(dataset.csv, content_type="text/csv")
-    response["Content-Disposition"] = f"attachment; filename={timestamp}_findings.csv"
+    response["Content-Disposition"] = f"attachment; filename={timestamp}_domains.csv"
 
     return response
 
@@ -1024,7 +1046,7 @@ def export_servers_to_csv(request):
     server_resource = StaticServerResource()
     dataset = server_resource.export()
     response = HttpResponse(dataset.csv, content_type="text/csv")
-    response["Content-Disposition"] = f"attachment; filename={timestamp}_findings.csv"
+    response["Content-Disposition"] = f"attachment; filename={timestamp}_servers.csv"
 
     return response
 
@@ -1287,7 +1309,7 @@ class ServerDetailView(LoginRequiredMixin, DetailView):
     **Context**
 
     ``primary_address``
-        Primary IP address from :model:`shepherd.AuxServerAddress` for :model:`shepherd.SaticServer`
+        Primary IP address from :model:`shepherd.AuxServerAddress` for :model:`shepherd.StaticServer`
 
     **Template**
 
@@ -1828,7 +1850,7 @@ class DomainNoteCreate(LoginRequiredMixin, CreateView):
         return super().form_valid(form)
 
 
-class DomainNoteUpdate(LoginRequiredMixin, UpdateView):
+class DomainNoteUpdate(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
     """
     Update an individual :model:`shepherd.DomainNote`.
 
@@ -1845,6 +1867,14 @@ class DomainNoteUpdate(LoginRequiredMixin, UpdateView):
     model = DomainNote
     form_class = DomainNoteForm
     template_name = "note_form.html"
+
+    def test_func(self):
+        self.object = self.get_object()
+        return self.object.operator.id == self.request.user.id
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that")
+        return redirect("home:dashboard")
 
     def get_success_url(self):
         messages.success(
@@ -1913,7 +1943,7 @@ class ServerNoteCreate(LoginRequiredMixin, CreateView):
         return super().form_valid(form)
 
 
-class ServerNoteUpdate(LoginRequiredMixin, UpdateView):
+class ServerNoteUpdate(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
     """
     Update an individual :model:`shepherd.ServerNote`.
 
@@ -1932,6 +1962,14 @@ class ServerNoteUpdate(LoginRequiredMixin, UpdateView):
     model = ServerNote
     form_class = ServerNoteForm
     template_name = "note_form.html"
+
+    def test_func(self):
+        self.object = self.get_object()
+        return self.object.operator.id == self.request.user.id
+
+    def handle_no_permission(self):
+        messages.error(self.request, "You do not have permission to access that")
+        return redirect("home:dashboard")
 
     def get_success_url(self):
         messages.success(

@@ -1,0 +1,397 @@
+table:
+  name: reporting_reportfindinglink
+  schema: public
+configuration:
+  column_config:
+    affected_entities:
+      custom_name: affectedEntities
+    assigned_to_id:
+      custom_name: assignedToId
+    finding_guidance:
+      custom_name: findingGuidance
+    finding_type_id:
+      custom_name: findingTypeId
+    host_detection_techniques:
+      custom_name: hostDetectionTechniques
+    network_detection_techniques:
+      custom_name: networkDetectionTechniques
+    report_id:
+      custom_name: reportId
+    severity_id:
+      custom_name: severityId
+  custom_column_names:
+    affected_entities: affectedEntities
+    assigned_to_id: assignedToId
+    finding_guidance: findingGuidance
+    finding_type_id: findingTypeId
+    host_detection_techniques: hostDetectionTechniques
+    network_detection_techniques: networkDetectionTechniques
+    report_id: reportId
+    severity_id: severityId
+  custom_name: reportedFinding
+  custom_root_fields: {}
+object_relationships:
+  - name: findingtype
+    using:
+      foreign_key_constraint_on: finding_type_id
+  - name: report
+    using:
+      foreign_key_constraint_on: report_id
+  - name: severity
+    using:
+      foreign_key_constraint_on: severity_id
+  - name: user
+    using:
+      foreign_key_constraint_on: assigned_to_id
+array_relationships:
+  - name: comments
+    using:
+      foreign_key_constraint_on:
+        column: finding_id
+        table:
+          name: reporting_localfindingnote
+          schema: public
+  - name: evidences
+    using:
+      foreign_key_constraint_on:
+        column: finding_id
+        table:
+          name: reporting_evidence
+          schema: public
+insert_permissions:
+  - role: manager
+    permission:
+      check: {}
+      set:
+        added_as_blank: "true"
+        assigned_to_id: x-hasura-User-Id
+      columns:
+        - affected_entities
+        - assigned_to_id
+        - complete
+        - cvss_score
+        - cvss_vector
+        - description
+        - finding_guidance
+        - finding_type_id
+        - host_detection_techniques
+        - impact
+        - mitigation
+        - network_detection_techniques
+        - position
+        - references
+        - replication_steps
+        - report_id
+        - severity_id
+        - title
+  - role: restricted
+    permission:
+      check:
+        report:
+          project:
+            _or:
+              - assignments:
+                  operator_id:
+                    _eq: X-Hasura-User-Id
+              - invites:
+                  user_id:
+                    _eq: X-Hasura-User-Id
+              - client:
+                  invites:
+                    user_id:
+                      _eq: X-Hasura-User-Id
+      set:
+        added_as_blank: "true"
+        assigned_to_id: x-hasura-User-Id
+      columns:
+        - affected_entities
+        - assigned_to_id
+        - description
+        - finding_guidance
+        - finding_type_id
+        - host_detection_techniques
+        - impact
+        - mitigation
+        - network_detection_techniques
+        - position
+        - references
+        - replication_steps
+        - report_id
+        - severity_id
+        - title
+  - role: user
+    permission:
+      check:
+        report:
+          project:
+            _or:
+              - assignments:
+                  operator_id:
+                    _eq: X-Hasura-User-Id
+              - invites:
+                  user_id:
+                    _eq: X-Hasura-User-Id
+              - client:
+                  invites:
+                    user_id:
+                      _eq: X-Hasura-User-Id
+      set:
+        added_as_blank: "true"
+        assigned_to_id: x-hasura-User-Id
+      columns:
+        - affected_entities
+        - assigned_to_id
+        - complete
+        - cvss_score
+        - cvss_vector
+        - description
+        - finding_guidance
+        - finding_type_id
+        - host_detection_techniques
+        - impact
+        - mitigation
+        - network_detection_techniques
+        - position
+        - references
+        - replication_steps
+        - report_id
+        - severity_id
+        - title
+select_permissions:
+  - role: manager
+    permission:
+      columns:
+        - added_as_blank
+        - affected_entities
+        - assigned_to_id
+        - complete
+        - cvss_score
+        - cvss_vector
+        - description
+        - finding_guidance
+        - finding_type_id
+        - host_detection_techniques
+        - id
+        - impact
+        - mitigation
+        - network_detection_techniques
+        - position
+        - references
+        - replication_steps
+        - report_id
+        - severity_id
+        - title
+      filter: {}
+  - role: restricted
+    permission:
+      columns: '*'
+      filter:
+        report:
+          project:
+            _or:
+              - assignments:
+                  operator_id:
+                    _eq: X-Hasura-User-Id
+              - invites:
+                  user_id:
+                    _eq: X-Hasura-User-Id
+              - client:
+                  invites:
+                    user_id:
+                      _eq: X-Hasura-User-Id
+  - role: user
+    permission:
+      columns:
+        - added_as_blank
+        - affected_entities
+        - assigned_to_id
+        - complete
+        - cvss_score
+        - cvss_vector
+        - description
+        - finding_guidance
+        - finding_type_id
+        - host_detection_techniques
+        - id
+        - impact
+        - mitigation
+        - network_detection_techniques
+        - position
+        - references
+        - replication_steps
+        - report_id
+        - severity_id
+        - title
+      filter:
+        report:
+          project:
+            _or:
+              - assignments:
+                  operator_id:
+                    _eq: X-Hasura-User-Id
+              - invites:
+                  user_id:
+                    _eq: X-Hasura-User-Id
+              - client:
+                  invites:
+                    user_id:
+                      _eq: X-Hasura-User-Id
+update_permissions:
+  - role: manager
+    permission:
+      columns:
+        - affected_entities
+        - assigned_to_id
+        - complete
+        - cvss_score
+        - cvss_vector
+        - description
+        - finding_guidance
+        - finding_type_id
+        - host_detection_techniques
+        - impact
+        - mitigation
+        - network_detection_techniques
+        - position
+        - references
+        - replication_steps
+        - report_id
+        - severity_id
+        - title
+      filter: {}
+      check: {}
+  - role: restricted
+    permission:
+      columns:
+        - affected_entities
+        - assigned_to_id
+        - complete
+        - description
+        - finding_guidance
+        - finding_type_id
+        - host_detection_techniques
+        - impact
+        - mitigation
+        - network_detection_techniques
+        - position
+        - references
+        - replication_steps
+        - report_id
+        - severity_id
+        - title
+      filter:
+        report:
+          project:
+            _or:
+              - assignments:
+                  operator_id:
+                    _eq: X-Hasura-User-Id
+              - invites:
+                  user_id:
+                    _eq: X-Hasura-User-Id
+              - client:
+                  invites:
+                    user_id:
+                      _eq: X-Hasura-User-Id
+      check:
+        report:
+          project:
+            _or:
+              - assignments:
+                  operator_id:
+                    _eq: X-Hasura-User-Id
+              - invites:
+                  user_id:
+                    _eq: X-Hasura-User-Id
+              - client:
+                  invites:
+                    user_id:
+                      _eq: X-Hasura-User-Id
+  - role: user
+    permission:
+      columns:
+        - affected_entities
+        - assigned_to_id
+        - complete
+        - cvss_score
+        - cvss_vector
+        - description
+        - finding_guidance
+        - finding_type_id
+        - host_detection_techniques
+        - impact
+        - mitigation
+        - network_detection_techniques
+        - position
+        - references
+        - replication_steps
+        - report_id
+        - severity_id
+        - title
+      filter:
+        report:
+          project:
+            _or:
+              - assignments:
+                  operator_id:
+                    _eq: X-Hasura-User-Id
+              - invites:
+                  user_id:
+                    _eq: X-Hasura-User-Id
+              - client:
+                  invites:
+                    user_id:
+                      _eq: X-Hasura-User-Id
+      check:
+        report:
+          project:
+            _or:
+              - assignments:
+                  operator_id:
+                    _eq: X-Hasura-User-Id
+              - invites:
+                  user_id:
+                    _eq: X-Hasura-User-Id
+              - client:
+                  invites:
+                    user_id:
+                      _eq: X-Hasura-User-Id
+delete_permissions:
+  - role: manager
+    permission:
+      backend_only: false
+      filter: {}
+  - role: restricted
+    permission:
+      backend_only: false
+      filter:
+        report:
+          project:
+            _or:
+              - assignments:
+                  operator_id:
+                    _eq: X-Hasura-User-Id
+              - invites:
+                  user_id:
+                    _eq: X-Hasura-User-Id
+              - client:
+                  invites:
+                    user_id:
+                      _eq: X-Hasura-User-Id
+  - role: user
+    permission:
+      backend_only: false
+      filter:
+        report:
+          project:
+            _or:
+              - assignments:
+                  operator_id:
+                    _eq: X-Hasura-User-Id
+              - invites:
+                  user_id:
+                    _eq: X-Hasura-User-Id
+              - client:
+                  invites:
+                    user_id:
+                      _eq: X-Hasura-User-Id

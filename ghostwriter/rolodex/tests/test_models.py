@@ -1,6 +1,6 @@
 # Standard Libraries
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 # Django Imports
 from django.test import TestCase
@@ -9,12 +9,18 @@ from django.test import TestCase
 from ghostwriter.factories import (
     ClientContactFactory,
     ClientFactory,
+    ClientInviteFactory,
     ClientNoteFactory,
+    DeconflictionFactory,
+    DeconflictionStatusFactory,
     HistoryFactory,
     ObjectivePriorityFactory,
     ObjectiveStatusFactory,
+    OplogEntryFactory,
+    OplogFactory,
     ProjectAssignmentFactory,
     ProjectFactory,
+    ProjectInviteFactory,
     ProjectNoteFactory,
     ProjectObjectiveFactory,
     ProjectRoleFactory,
@@ -26,6 +32,7 @@ from ghostwriter.factories import (
     ReportFindingLinkFactory,
     ServerHistoryFactory,
     UserFactory,
+    WhiteCardFactory,
 )
 
 logging.disable(logging.CRITICAL)
@@ -222,6 +229,15 @@ class ProjectModelTests(TestCase):
         for x in range(3):
             ReportFindingLinkFactory(report=report)
         self.assertEqual(project.count_findings(), 3)
+
+    def test_update_project_signal(self):
+        project = ProjectFactory(slack_channel=None)
+        project.end_date = project.end_date + timedelta(days=1)
+        project.save()
+        project.slack_channel = "#testing"
+        project.save()
+        project.slack_channel = None
+        project.save()
 
 
 class ProjectRoleModelTests(TestCase):
@@ -595,3 +611,177 @@ class ProjectTargetModelTests(TestCase):
         # Delete
         target.delete()
         assert not self.ProjectTarget.objects.all().exists()
+
+
+class ClientInviteModelTests(TestCase):
+    """Collection of tests for :model:`rolodex.ClientInvite`."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.ClientInvite = ClientInviteFactory._meta.model
+
+    def test_crud_finding(self):
+        # Create
+        invite = ClientInviteFactory(comment="Basic comment")
+
+        # Read
+        self.assertEqual(invite.comment, "Basic comment")
+        self.assertEqual(invite.pk, invite.id)
+        self.assertQuerysetEqual(
+            self.ClientInvite.objects.all(),
+            [f"<ClientInvite: {invite.user} ({invite.client})>"],
+        )
+
+        # Update
+        invite.comment = "Updated comment"
+        invite.save()
+        invite.refresh_from_db()
+        self.assertEqual(invite.comment, "Updated comment")
+
+        # Delete
+        invite.delete()
+        assert not self.ClientInvite.objects.all().exists()
+
+
+class ProjectInviteModelTests(TestCase):
+    """Collection of tests for :model:`rolodex.ProjectInvite`."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.ProjectInvite = ProjectInviteFactory._meta.model
+
+    def test_crud_finding(self):
+        # Create
+        invite = ProjectInviteFactory(comment="Basic comment")
+
+        # Read
+        self.assertEqual(invite.comment, "Basic comment")
+        self.assertEqual(invite.pk, invite.id)
+        self.assertQuerysetEqual(
+            self.ProjectInvite.objects.all(),
+            [f"<ProjectInvite: {invite.user} ({invite.project})>"],
+        )
+
+        # Update
+        invite.comment = "Updated comment"
+        invite.save()
+        invite.refresh_from_db()
+        self.assertEqual(invite.comment, "Updated comment")
+
+        # Delete
+        invite.delete()
+        assert not self.ProjectInvite.objects.all().exists()
+
+
+class DeconflictionStatusModelTests(TestCase):
+    """Collection of tests for :model:`rolodex.DeconflictionStatus`."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.DeconflictionStatus = DeconflictionStatusFactory._meta.model
+
+    def test_crud_finding(self):
+        # Create
+        status = DeconflictionStatusFactory(status="Confirmed")
+
+        # Read
+        self.assertEqual(status.status, "Confirmed")
+        self.assertEqual(status.pk, status.id)
+        self.assertQuerysetEqual(
+            self.DeconflictionStatus.objects.all(),
+            ["<DeconflictionStatus: Confirmed>"],
+        )
+
+        # Update
+        status.status = "Undetermined"
+        status.save()
+        self.assertQuerysetEqual(
+            self.DeconflictionStatus.objects.all(),
+            ["<DeconflictionStatus: Undetermined>"],
+        )
+
+        # Delete
+        status.delete()
+        assert not self.DeconflictionStatus.objects.all().exists()
+
+
+class DeconflictionModelTests(TestCase):
+    """Collection of tests for :model:`rolodex.Deconfliction`."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.Deconfliction = DeconflictionFactory._meta.model
+        cls.project = ProjectFactory()
+
+    def test_crud_finding(self):
+        # Create
+        status = DeconflictionFactory(title="Deconfliction Title", project=self.project)
+
+        # Read
+        self.assertEqual(status.title, "Deconfliction Title")
+        self.assertEqual(status.pk, status.id)
+        self.assertQuerysetEqual(
+            self.Deconfliction.objects.all(),
+            [f"<Deconfliction: {self.project}: Deconfliction Title>"],
+        )
+
+        # Update
+        status.title = "New Deconfliction Title"
+        status.save()
+        self.assertQuerysetEqual(
+            self.Deconfliction.objects.all(),
+            [f"<Deconfliction: {self.project}: New Deconfliction Title>"],
+        )
+
+        # Delete
+        status.delete()
+        assert not self.Deconfliction.objects.all().exists()
+
+    def test_prop_log_entries(self):
+        project = ProjectFactory()
+        deconfliction = DeconflictionFactory(project=project, alert_timestamp=datetime.now(timezone.utc))
+        oplog = OplogFactory(project=project)
+
+        entry_too_old = OplogEntryFactory(oplog_id=oplog, start_date=datetime.now(timezone.utc) - timedelta(days=1))
+        entry_hour_old = OplogEntryFactory(oplog_id=oplog, start_date=datetime.now(timezone.utc) - timedelta(hours=1))
+        entry_within_hour = OplogEntryFactory(oplog_id=oplog, start_date=datetime.now(timezone.utc) - timedelta(minutes=30))
+        entry_recent = OplogEntryFactory(oplog_id=oplog, start_date=datetime.now(timezone.utc) + timedelta(minutes=5))
+
+        self.assertEqual(len(deconfliction.log_entries), 2)
+        self.assertTrue(entry_hour_old in deconfliction.log_entries)
+        self.assertTrue(entry_within_hour in deconfliction.log_entries)
+        self.assertFalse(entry_too_old in deconfliction.log_entries)
+        self.assertFalse(entry_recent in deconfliction.log_entries)
+
+
+class WhiteCardModelTests(TestCase):
+    """Collection of tests for :model:`rolodex.WhiteCard`."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.WhiteCard = WhiteCardFactory._meta.model
+        cls.project = ProjectFactory()
+
+    def test_crud_finding(self):
+        # Create
+        card = WhiteCardFactory(title="White Card Title", project=self.project)
+
+        # Read
+        self.assertEqual(card.title, "White Card Title")
+        self.assertEqual(card.pk, card.id)
+        self.assertQuerysetEqual(
+            self.WhiteCard.objects.all(),
+            [f"<WhiteCard: {self.project}: White Card Title>"],
+        )
+
+        # Update
+        card.title = "New White Card Title"
+        card.save()
+        self.assertQuerysetEqual(
+            self.WhiteCard.objects.all(),
+            [f"<WhiteCard: {self.project}: New White Card Title>"],
+        )
+
+        # Delete
+        card.delete()
+        assert not self.WhiteCard.objects.all().exists()

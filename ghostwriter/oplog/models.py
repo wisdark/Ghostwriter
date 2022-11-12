@@ -34,6 +34,10 @@ class Oplog(models.Model):
         null=True,
         help_text="Select the project that will own this oplog",
     )
+    mute_notifications = models.BooleanField(
+        default=False,
+        help_text="Mute activity monitoring notifications for this log",
+    )
 
     class Meta:
         unique_together = ["name", "project"]
@@ -59,34 +63,39 @@ class OplogEntry(models.Model):
     end_date = models.DateTimeField(null=True, blank=True)
     source_ip = models.TextField(
         "Source IP / Hostname",
+        null=True,
         blank=True,
         help_text="Provide the source hostname / IP from which the command originated.",
     )
 
     dest_ip = models.TextField(
         "Destination IP/Hostname",
+        null=True,
         blank=True,
         help_text="Provide the destination hostname / ip on which the command was ran.",
     )
 
     tool = models.TextField(
-        "Tool name", blank=True, help_text="The tool used to execute the action"
+        "Tool name", null=True, blank=True, help_text="The tool used to execute the action",
     )
 
     user_context = models.TextField(
         "User Context",
+        null=True,
         blank=True,
         help_text="The user context that executed the command",
     )
 
     command = models.TextField(
         "Command",
+        null=True,
         blank=True,
         help_text="The command that was executed",
     )
 
     description = models.TextField(
         "Description",
+        null=True,
         blank=True,
         help_text="A description of why the command was executed and expected results.",
     )
@@ -100,12 +109,14 @@ class OplogEntry(models.Model):
 
     comments = models.TextField(
         "Comments",
+        null=True,
         blank=True,
         help_text="Any additional comments or useful information.",
     )
 
     operator_name = models.CharField(
         "Operator",
+        null=True,
         blank=True,
         help_text="The operator that performed the action.",
         max_length=255,

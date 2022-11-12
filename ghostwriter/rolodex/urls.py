@@ -52,6 +52,11 @@ urlpatterns += [
         name="ajax_delete_project_objective",
     ),
     path(
+        "ajax/project/deconfliction/delete/<int:pk>",
+        views.DeconflictionDelete.as_view(),
+        name="ajax_delete_project_deconfliction",
+    ),
+    path(
         "ajax/project/assignment/delete/<int:pk>",
         views.ProjectAssignmentDelete.as_view(),
         name="ajax_delete_project_assignment",
@@ -95,6 +100,11 @@ urlpatterns += [
         "ajax/project/scope/delete/<int:pk>",
         views.ProjectScopeDelete.as_view(),
         name="ajax_delete_project_scope",
+    ),
+    path(
+        "ajax/project/scope/export/<int:pk>",
+        views.ProjectScopeExport.as_view(),
+        name="ajax_export_project_scope",
     ),
     path(
         "ajax/project/task/create/<int:pk>",
@@ -171,5 +181,15 @@ urlpatterns += [
         "projects/notes/update/<int:pk>",
         views.ProjectNoteUpdate.as_view(),
         name="project_note_edit",
+    ),
+    path(
+        "projects/deconfliction/create/<int:pk>",
+        views.DeconflictionCreate.as_view(),
+        name="project_deconfliction_create",
+    ),
+    path(
+        "projects/deconfliction/update/<int:pk>",
+        views.DeconflictionUpdate.as_view(),
+        name="project_deconfliction_update",
     ),
 ]

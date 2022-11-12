@@ -44,6 +44,8 @@ urlpatterns = [
         protected_serve,
         {"document_root": settings.MEDIA_ROOT},
     ),
+    path("api/", include("ghostwriter.api.urls", namespace="api")),
+    path("status/", include("ghostwriter.status.urls", namespace="status")),
     # Add additional custom paths below this line...
     # Your stuff: custom urls includes go here
 ]
