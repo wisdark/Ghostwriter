@@ -20,13 +20,18 @@
 
   <!-- jQuery JS -->
   <script src="{% static 'js/jquery-3.6.1.min.js' %}"></script>
+  <script src="{% static 'js/jquery-ui.js' %}"></script>
   <script src="{% static 'js/popper.min.js' %}"></script>
   <script src="{% static 'js/bootstrap.min.js' %}"></script>
+
+  <!-- Sugar Parser -->
+  <script src="{% static 'js/sugar.min.js' %}"></script>
 
   <!-- jQuery Tablesorter Plugin -->
   <script type="text/javascript" src="{% static 'js/jquery.tablesorter.js' %}"></script>
   <script type="text/javascript" src="{% static 'js/jquery.tablesorter.widgets.js' %}"></script>
   <script type="text/javascript" src="{% static 'js/parser-date-range.min.js' %}"></script>
+  <script type="text/javascript" src="{% static 'js/parser-date.js' %}"></script>
 
   <!-- SortableJS for Drag n Drop -->
   <script src="{% static 'js/Sortable.min.js' %}"></script>
@@ -81,8 +86,6 @@
   <link rel="stylesheet" href="{% static 'css/cvss_styles.css' %}">
   <script src="{% static 'js/cvsscalc30.js' %}"></script>
   <script src="{% static 'js/cvsscalc30_ui.js' %}"></script>
-
-
 </head>
 
 <body>
@@ -128,9 +131,9 @@
               <div class="expand_caret caret"></div>
             </a>
             <ul class="collapse list-unstyled text-left" id="activeReportsSubmenu">
-              {% get_reports request as reports %}
-              {% if reports %}
-                {% for report in reports %}
+              {% get_assignment_data request as user_project_data %}
+              {% if user_project_data.1 %}
+                {% for report in user_project_data.1 %}
                   <li>
                     <a title="Set this report as your active report"
                        class="js-activate-report icon toggle-off-icon
@@ -144,7 +147,8 @@
                   </li>
                 {% endfor %}
               {% else %}
-                <li><a href="{% url 'reporting:reports' %}">You have no active reports; click to visit the library.</a>
+                <li><a href="{% url 'reporting:reports' %}">You do not have any active reports; click here to visit the
+                  library.</a>
                 </li>
               {% endif %}
             </ul>
@@ -157,15 +161,14 @@
               <div class="expand_caret caret"></div>
             </a>
             <ul class="collapse list-unstyled text-left" id="activeProjectsSubmenu">
-              {% if request.user.projectassignment_set.all %}
-                {% for assignment in request.user.projectassignment_set.all %}
-                  {% if not assignment.project.complete %}
-                    <li><a href="{% url 'rolodex:project_detail' assignment.project.id %}">{{ assignment.project }}</a>
-                    </li>
-                  {% endif %}
+              {% if user_project_data.0 %}
+                {% for assignment in user_project_data.0 %}
+                  <li><a href="{% url 'rolodex:project_detail' assignment.id %}">{{ assignment }}</a>
+                  </li>
                 {% endfor %}
               {% else %}
-                <li><a href="{% url 'rolodex:projects' %}">You have no assignments; click to visit the library.</a></li>
+                <li><a href="{% url 'rolodex:projects' %}">You do not have any active assignments; click here to visit
+                  the library.</a></li>
               {% endif %}
             </ul>
           </li>
@@ -185,12 +188,14 @@
             <ul class="collapse list-unstyled text-left" id="clientSubmenu">
               {% comment %} Search for Clients {% endcomment %}
               <form class="px-6 py-2" action="{% url 'rolodex:clients' %}" method="GET">
-                <input type="search" autocomplete="off" class="form-control" id="client-search" name="client_search"
+                <input type="search" autocomplete="off" class="form-control" id="client-search" name="name"
                        placeholder="Search Clients..." autofocus="autofocus">
               </form>
               {% comment %} Clients Submenu Items {% endcomment %}
               <li><a class="icon list-icon" href="{% url 'rolodex:clients' %}">Client Library</a></li>
-              <li><a class="icon plus-icon" href="{% url 'rolodex:client_create' %}">Add New Client</a></li>
+              {% if request.user|is_privileged %}
+                <li><a class="icon plus-icon" href="{% url 'rolodex:client_create' %}">Add New Client</a></li>
+              {% endif %}
             </ul>
           </li>
           <li>
@@ -199,12 +204,31 @@
             <ul class="collapse list-unstyled text-left" id="findingsSubmenu">
               {% comment %} Search for Findings {% endcomment %}
               <form class="px-6 py-2" action="{% url 'reporting:findings' %}" method="GET">
-                <input type="search" autocomplete="off" class="form-control" id="finding-search" name="finding_search"
+                <input type="search" autocomplete="off" class="form-control" id="finding-search" name="title"
                        placeholder="Search Findings..." autofocus="autofocus">
               </form>
               {% comment %} Findings Submenu Items {% endcomment %}
               <li><a class="icon list-icon" href="{% url 'reporting:findings' %}">Finding Library</a></li>
-              <li><a class="icon plus-icon" href="{% url 'reporting:finding_create' %}">Add New Finding</a></li>
+              {% if request.user|can_create_finding %}
+                <li><a class="icon plus-icon" href="{% url 'reporting:finding_create' %}">Add New Finding</a></li>
+              {% endif %}
+            </ul>
+          </li>
+          <li>
+            <a href="#observationsSubmenu" data-toggle="collapse" aria-expanded="false"
+               class="dropdown-toggle sidebar-dropdown-toggle">Observations</a>
+            <ul class="collapse list-unstyled text-left" id="observationsSubmenu">
+              {% comment %} Search for observations {% endcomment %}
+              <form class="px-6 py-2" action="{% url 'reporting:observations' %}" method="GET">
+                <input type="search" autocomplete="off" class="form-control" id="observation-search" name="title"
+                       placeholder="Search observations..." autofocus="autofocus">
+              </form>
+              {% comment %} observations Submenu Items {% endcomment %}
+              <li><a class="icon list-icon" href="{% url 'reporting:observations' %}">Observation Library</a></li>
+              {% if request.user|can_create_observation %}
+                <li><a class="icon plus-icon" href="{% url 'reporting:observation_create' %}">Add New Observation</a>
+                </li>
+              {% endif %}
             </ul>
           </li>
         </ul>
@@ -222,7 +246,10 @@
                class="dropdown-toggle sidebar-dropdown-toggle">Projects</a>
             <ul class="collapse list-unstyled text-left" id="projectSubmenu">
               <li><a class="icon list-icon" href="{% url 'rolodex:projects' %}">Projects Library</a></li>
-              <li><a class="icon plus-icon" href="{% url 'rolodex:project_create_no_client' %}">Add New Project</a></li>
+              {% if request.user|is_privileged %}
+                <li><a class="icon plus-icon" href="{% url 'rolodex:project_create_no_client' %}">Add New Project</a>
+                </li>
+              {% endif %}
             </ul>
           </li>
           <li>
@@ -287,7 +314,7 @@
             <ul class="collapse list-unstyled text-left" id="shepSubmenu">
               {% comment %} Search for Domains {% endcomment %}
               <form class="px-6 py-2" action="{% url 'shepherd:domains' %}" method="GET">
-                <input type="search" autocomplete="off" class="form-control" id="domain-search" name="domain_search"
+                <input type="search" autocomplete="off" class="form-control" id="domain-search" name="domain"
                        placeholder="Search Domains..." autofocus="autofocus">
               </form>
               {% comment %} Domains Submenu Items {% endcomment %}
@@ -327,6 +354,12 @@
                 <li><a class="icon import-icon" href="{% url 'admin:reporting_finding_import' %}">Upload Bulk
                   Findings</a></li>
                 <li><a class="icon export-icon" href="{% url 'reporting:export_findings_to_csv' %}">Export Findings to
+                  CSV</a></li>
+                <hr>
+                <li><a class="icon import-icon" href="{% url 'admin:reporting_observation_import' %}">Upload Bulk
+                  Observations</a></li>
+                <li><a class="icon export-icon" href="{% url 'reporting:export_observations_to_csv' %}">Export
+                  Observations to
                   CSV</a></li>
                 <hr>
                 <li><a class="icon import-icon" href="{% url 'admin:shepherd_domain_import' %}">Upload Bulk Domains</a>
@@ -382,7 +415,8 @@
         <!-- User Profile & Avatar -->
         <a href="{% url 'users:user_detail' request.user.username %}">
           <img class="navbar-avatar"
-               src="{{ request.user.userprofile.avatar_url }}"
+               data-toggle="tooltip" data-placement="top" title="Logged-in as {{ request.user.username }}"
+               src="{% url 'users:avatar_download' slug=request.user.username %}"
                alt="Avatar">
         </a>
       </div>
@@ -399,6 +433,20 @@
 
 {% comment %} Scripts included on ALL pages {% endcomment %}
 <script>
+  {% comment %} Handle AJAX errors {% endcomment %}
+  (function ($) {
+    $(document).on('ajaxError', function (event, xhr) {
+      if (xhr.status === 401 || xhr.status === 403) {
+        if (xhr.hasOwnProperty('responseJSON')) {
+          let errorData = xhr.responseJSON;
+          if (errorData['message']) {
+            displayToastTop({type: errorData['result'], string: errorData['message'], title: 'Error'});
+          }
+        }
+      }
+    });
+  })(jQuery);
+
   {% comment %} Scroll button handling {% endcomment %}
   let scrollButton = $('#scroll-button');
 
@@ -504,7 +552,7 @@
 
   {% comment %} Activate Bootstrap hover tooltips {% endcomment %}
   $(document).ready(function () {
-    $('[data-toggle="tooltip"]').tooltip();
+    $('[data-toggle="tooltip"]').tooltip({boundary: "window"});
   });
 
   {% comment %} All of the Toastr JavaScript {% endcomment %}
@@ -534,15 +582,15 @@
   {% for message in messages %}
     {% if 'no-toast' not in message.tags %}
       {% if message.level == DEFAULT_MESSAGE_LEVELS.SUCCESS %}
-        displayToastTop({type: 'success', string: '{{ message }}'});
+        displayToastTop({type: 'success', string: '{{ message|escapejs }}'});
       {% elif message.level == DEFAULT_MESSAGE_LEVELS.WARNING %}
-        displayToastTop({type: 'warning', string: '{{ message }}'});
+        displayToastTop({type: 'warning', string: '{{ message|escapejs }}'});
       {% elif message.level == DEFAULT_MESSAGE_LEVELS.ERROR %}
-        displayToastTop({type: 'error', string: '{{ message }}'});
+        displayToastTop({type: 'error', string: '{{ message|escapejs }}'});
       {% elif message.level == DEFAULT_MESSAGE_LEVELS.INFO %}
-        displayToastTop({type: 'info', string: '{{ message }}'});
+        displayToastTop({type: 'info', string: '{{ message|escapejs }}'});
       {% elif message.level == DEFAULT_MESSAGE_LEVELS.DEBUG %}
-        displayToastTop({type: 'info', string: '{{ message }}'});
+        displayToastTop({type: 'info', string: '{{ message|escapejs }}'});
       {% endif %}
     {% endif %}
   {% endfor %}
@@ -554,7 +602,7 @@
       ws_proto = 'wss://'
     }
     const protocol = ws_proto
-    const username = '{{ user }}';
+    const username = '{{ user.get_clean_username }}';
 
     {% comment %} Connect to channel for individual notifications {% endcomment %}
     const ws_user = new WebSocket(
@@ -619,8 +667,10 @@
       $('.nav-tabs a').click(function (e) {
         {%  comment %} Prevent the scrolling-to-tab animation {% endcomment %}
         $('html,body').stop().animate({
-          scrollTop: $($(this).attr('href')).offset().top - $('.nav').height()
+          scrollTop: $(this).offset().top - 175
         }, 700, 'swing');
+        e.preventDefault();
+        e.stopImmediatePropagation();
         $(this).tab('show');
         window.location.hash = $(this).attr('href');
       });
@@ -706,8 +756,8 @@
       });
     });
 
-    {% comment %} Toggle the hamburger menu back to normal if user clicks away {% endcomment %}
     $(window).click(function () {
+      {% comment %} Toggle the hamburger menu back to normal if user clicks away {% endcomment %}
       let $hamburgerMenu = $('.dropdown-menu-btn')
       if ($hamburgerMenu.hasClass('change')) {
         $hamburgerMenu.removeClass('change');

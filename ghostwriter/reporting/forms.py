@@ -8,6 +8,7 @@ from django import forms
 from django.core.exceptions import ValidationError
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+from django.db.models import Q
 
 # 3rd Party Libraries
 from crispy_forms.bootstrap import Accordion, AccordionGroup, FieldWithButtons
@@ -24,15 +25,22 @@ from crispy_forms.layout import (
 )
 
 # Ghostwriter Libraries
+from ghostwriter.api.utils import get_client_list, get_project_list
+from ghostwriter.commandcenter.forms import ExtraFieldsField
 from ghostwriter.commandcenter.models import ReportConfiguration
 from ghostwriter.modules.custom_layout_object import SwitchToggle
+from ghostwriter.modules.reportwriter.forms import JinjaRichTextField
+from ghostwriter.modules.reportwriter.project.base import ExportProjectBase
+from ghostwriter.modules.reportwriter.report.base import ExportReportBase
 from ghostwriter.reporting.models import (
     Evidence,
     Finding,
     FindingNote,
     LocalFindingNote,
+    Observation,
     Report,
     ReportFindingLink,
+    ReportObservationLink,
     ReportTemplate,
     Severity,
 )
@@ -40,13 +48,22 @@ from ghostwriter.rolodex.models import Project
 
 
 class FindingForm(forms.ModelForm):
-    """
-    Save an individual :model:`reporting.Finding`.
-    """
+    """Save an individual :model:`reporting.Finding`."""
+
+    extra_fields = ExtraFieldsField(Finding._meta.label)
 
     class Meta:
         model = Finding
         fields = "__all__"
+        field_classes = {
+            "description": JinjaRichTextField,
+            "impact": JinjaRichTextField,
+            "mitigation": JinjaRichTextField,
+            "replication_steps": JinjaRichTextField,
+            "host_detection_techniques": JinjaRichTextField,
+            "references": JinjaRichTextField,
+            "finding_guidance": JinjaRichTextField,
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -68,6 +85,10 @@ class FindingForm(forms.ModelForm):
         ] = "When using this finding in a report be sure to include ..."
         self.fields["tags"].widget.attrs["placeholder"] = "ATT&CK:T1555, privesc, ..."
         self.fields["finding_type"].label = "Finding Type"
+        self.fields["extra_fields"].label = ""
+
+        has_extra_fields = bool(self.fields["extra_fields"].specs)
+
         # Design form layout with Crispy FormHelper
         self.helper = FormHelper()
         self.helper.form_show_labels = True
@@ -233,6 +254,15 @@ class FindingForm(forms.ModelForm):
             ),
             "references",
             "finding_guidance",
+            HTML(
+                """
+                <h4 class="icon custom-field-icon">Extra Fields</h4>
+                <hr />
+                """
+            )
+            if has_extra_fields
+            else None,
+            Field("extra_fields") if has_extra_fields else None,
             ButtonHolder(
                 Submit("submit_btn", "Submit", css_class="btn btn-primary col-md-4"),
                 HTML(
@@ -252,21 +282,36 @@ class ReportForm(forms.ModelForm):
 
     class Meta:
         model = Report
-        exclude = ("creation", "last_update", "created_by", "complete")
+        exclude = ("creation", "last_update", "created_by", "complete", "extra_fields")
 
-    def __init__(self, project=None, *args, **kwargs):
+    def __init__(self, user=None, project=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.project_instance = project
-        # Limit the list to just projects not marked as complete
-        active_projects = Project.objects.filter(complete=False).order_by("-start_date", "client", "project_type")
-        if active_projects:
-            self.fields["project"].empty_label = "-- Select an Active Project --"
-        else:
-            self.fields["project"].empty_label = "-- No Active Projects --"
-        self.fields["project"].queryset = active_projects
-        self.fields[
-            "project"
-        ].label_from_instance = lambda obj: f"{obj.start_date} {obj.client.name} {obj.project_type} ({obj.codename})"
+        # If this is an update, mark the project field as read-only
+        instance = getattr(self, "instance", None)
+        if instance and instance.pk:
+            self.fields["project"].disabled = True
+
+        # Limit the list to the pre-selected project and disable the field
+        if project:
+            self.fields["project"].queryset = Project.objects.filter(pk=project.pk)
+            self.fields["project"].disabled = True
+
+        if not project:
+            projects = get_project_list(user)
+            active_projects = projects.filter(complete=False).order_by("-start_date", "client", "project_type")
+            if active_projects:
+                self.fields["project"].empty_label = "-- Select an Active Project --"
+            else:
+                self.fields["project"].empty_label = "-- No Active Projects --"
+            self.fields["project"].queryset = active_projects
+            self.fields[
+                "project"
+            ].label_from_instance = (
+                lambda obj: f"{obj.start_date} {obj.client.name} {obj.project_type} ({obj.codename})"
+            )
+
+        for field in self.fields:
+            self.fields[field].widget.attrs["autocomplete"] = "off"
         self.fields["docx_template"].label = "DOCX Template"
         self.fields["pptx_template"].label = "PPTX Template"
         self.fields["docx_template"].required = False
@@ -323,6 +368,10 @@ class ReportFindingLinkUpdateForm(forms.ModelForm):
     individual :model:`reporting.Report`.
     """
 
+    # Note: since ReportFindingLinks are essentially a finding bound to a report, it uses
+    # the finding's extra field specifications, rather than having its own.
+    extra_fields = ExtraFieldsField(Finding._meta.label)
+
     class Meta:
         model = ReportFindingLink
         exclude = (
@@ -331,12 +380,21 @@ class ReportFindingLinkUpdateForm(forms.ModelForm):
             "finding_guidance",
             "added_as_blank",
         )
+        field_classes = {
+            "description": JinjaRichTextField,
+            "impact": JinjaRichTextField,
+            "mitigation": JinjaRichTextField,
+            "replication_steps": JinjaRichTextField,
+            "host_detection_techniques": JinjaRichTextField,
+            "references": JinjaRichTextField,
+            "finding_guidance": JinjaRichTextField,
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         evidence_upload_url = reverse(
             "reporting:upload_evidence_modal",
-            kwargs={"pk": self.instance.id, "modal": "modal"},
+            kwargs={"parent_type": "finding", "pk": self.instance.id, "modal": "modal"},
         )
         for field in self.fields:
             self.fields[field].widget.attrs["autocomplete"] = "off"
@@ -354,6 +412,11 @@ class ReportFindingLinkUpdateForm(forms.ModelForm):
         self.fields["tags"].widget.attrs["placeholder"] = "ATT&CK:T1555, privesc, ..."
         self.fields["finding_type"].label = "Finding Type"
         self.fields["assigned_to"].label = "Assigned Editor"
+        self.fields["extra_fields"].label = ""
+        self.fields["complete"].help_text = ""
+
+        has_extra_fields = bool(self.fields["extra_fields"].specs)
+
         # Design form layout with Crispy FormHelper
         self.helper = FormHelper()
         self.helper.form_show_labels = True
@@ -361,6 +424,12 @@ class ReportFindingLinkUpdateForm(forms.ModelForm):
         self.helper.form_id = "report-finding-form"
         self.helper.attrs = {"evidence-upload-modal-url": evidence_upload_url}
         self.helper.layout = Layout(
+            Column(
+                SwitchToggle(
+                    "complete",
+                ),
+                css_class="form-group offset-3 col-md-6 mb-0",
+            ),
             HTML(
                 """
                 <h4 class="icon search-icon">Categorization</h4>
@@ -528,6 +597,15 @@ class ReportFindingLinkUpdateForm(forms.ModelForm):
                 """
             ),
             Field("references", css_class="enable-evidence-upload"),
+            HTML(
+                """
+                <h4 class="icon custom-field-icon">Extra Fields</h4>
+                <hr />
+                """
+            )
+            if has_extra_fields
+            else None,
+            Field("extra_fields") if has_extra_fields else None,
             ButtonHolder(
                 Submit("submit_btn", "Submit", css_class="btn btn-primary col-md-4"),
                 HTML(
@@ -558,6 +636,9 @@ class EvidenceForm(forms.ModelForm):
         )
         widgets = {
             "document": forms.FileInput(attrs={"class": "form-control"}),
+        }
+        field_classes = {
+            "description": JinjaRichTextField,
         }
 
     def __init__(self, *args, **kwargs):
@@ -650,13 +731,11 @@ class EvidenceForm(forms.ModelForm):
         friendly_name = self.cleaned_data["friendly_name"]
         if self.evidence_queryset:
             # Check if provided name has already been used for another file for this report
-            report_queryset = self.evidence_queryset.values_list("id", "friendly_name")
-            for evidence in report_queryset:
-                if friendly_name == evidence[1] and not self.instance.id == evidence[0]:
-                    raise ValidationError(
-                        _("This friendly name has already been used for a file attached to this finding."),
-                        "duplicate",
-                    )
+            if self.evidence_queryset.filter(Q(friendly_name=friendly_name) & ~Q(id=self.instance.id)).exists():
+                raise ValidationError(
+                    _("This friendly name has already been used for a file attached to this report."),
+                    "duplicate",
+                )
         return friendly_name
 
 
@@ -669,6 +748,9 @@ class FindingNoteForm(forms.ModelForm):
     class Meta:
         model = FindingNote
         fields = ("note",)
+        field_classes = {
+            "note": JinjaRichTextField,
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -709,6 +791,9 @@ class LocalFindingNoteForm(forms.ModelForm):
     class Meta:
         model = LocalFindingNote
         fields = ("note",)
+        field_classes = {
+            "note": JinjaRichTextField,
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -741,9 +826,21 @@ class LocalFindingNoteForm(forms.ModelForm):
 
 
 class ReportTemplateForm(forms.ModelForm):
-    """
-    Save an individual :model:`reporting.ReportTemplate`.
-    """
+    """Save an individual :model:`reporting.ReportTemplate`."""
+
+    def clean(self):
+        filename_override = self.cleaned_data["filename_override"]
+        if not filename_override:
+            return
+
+        doc_typ = self.cleaned_data["doc_type"]
+        try:
+            if doc_typ.doc_type == "docx":
+                ExportReportBase.check_filename_template(filename_override)
+            elif doc_typ.doc_type == "pptx" or doc_typ.doc_type == "project_docx":
+                ExportProjectBase.check_filename_template(filename_override)
+        except ValidationError as e:
+            self.add_error("filename_override", e)
 
     class Meta:
         model = ReportTemplate
@@ -752,18 +849,30 @@ class ReportTemplateForm(forms.ModelForm):
             "document": forms.FileInput(attrs={"class": "form-control"}),
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, user=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         for field in self.fields:
             self.fields[field].widget.attrs["autocomplete"] = "off"
+
+        if kwargs.get("instance"):
+            self.fields["client"].help_text += ". Changing this will unset this template as the global default template and the default templates on reports for other clients."
+            self.fields["doc_type"].help_text += ". Changing this will unset this template as the global default template and the default templates on reports."
+
         self.fields["document"].label = ""
         self.fields["document"].widget.attrs["class"] = "custom-file-input"
         self.fields["name"].widget.attrs["placeholder"] = "Default Red Team Report"
         self.fields["description"].widget.attrs["placeholder"] = "Use this template for any red team work unless ..."
         self.fields["changelog"].widget.attrs["placeholder"] = "Track Template Modifications"
-        self.fields["doc_type"].empty_label = "-- Select a Matching Filetype --"
+        self.fields["doc_type"].empty_label = "-- Select a Matching Template Type --"
         self.fields["client"].empty_label = "-- Attach to a Client (Optional) --"
         self.fields["tags"].widget.attrs["placeholder"] = "language:en_US, cvss, ..."
+        self.fields["p_style"].widget.attrs["placeholder"] = "Normal"
+        self.fields["p_style"].initial = "Normal"
+        self.fields["doc_type"].label = "Document Type"
+
+        clients = get_client_list(user)
+        self.fields["client"].queryset = clients
+
         # Design form layout with Crispy FormHelper
         self.helper = FormHelper()
         self.helper.form_method = "post"
@@ -778,12 +887,16 @@ class ReportTemplateForm(forms.ModelForm):
             ),
             Row(
                 Column("name", css_class="form-group col-md-6 mb-0"),
-                Column("tags", css_class="form-group col-md-6 mb-0"),
+                Column("client", css_class="form-group col-md-6 mb-0"),
                 css_class="form-row",
             ),
             Row(
                 Column("doc_type", css_class="form-group col-md-6 mb-0"),
-                Column("client", css_class="form-group col-md-6 mb-0"),
+                Column("p_style", css_class="form-group col-md-6 mb-0"),
+                css_class="form-row",
+            ),
+            Row(
+                Column("tags", css_class="form-group col-md-12 mb-0"),
                 css_class="form-row",
             ),
             Row(
@@ -801,6 +914,7 @@ class ReportTemplateForm(forms.ModelForm):
                 ),
                 css_class="form-row pb-2",
             ),
+            "filename_override",
             "description",
             HTML(
                 """
@@ -944,9 +1058,7 @@ class SelectReportTemplateForm(forms.ModelForm):
 
 
 class SeverityForm(forms.ModelForm):
-    """
-    Save an individual :model:`reporting.Severity`.
-    """
+    """Save an individual :model:`reporting.Severity`."""
 
     class Meta:
         model = Severity
@@ -974,3 +1086,104 @@ class SeverityForm(forms.ModelForm):
                 )
 
         return color
+
+
+class ObservationForm(forms.ModelForm):
+    """Save an individual :model:`reporting.Observation`."""
+
+    extra_fields = ExtraFieldsField(Observation._meta.label)
+
+    class Meta:
+        model = Observation
+        fields = "__all__"
+        field_classes = {
+            "description": JinjaRichTextField,
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields:
+            self.fields[field].widget.attrs["autocomplete"] = "off"
+        self.fields["title"].widget.attrs["placeholder"] = "Observation Title"
+        self.fields["description"].widget.attrs["placeholder"] = "What is this ..."
+        self.fields["tags"].widget.attrs["placeholder"] = "ATT&CK:T1555, privesc, ..."
+        self.fields["extra_fields"].label = ""
+
+        self.helper = FormHelper()
+        self.helper.form_show_labels = True
+        self.helper.form_method = "post"
+        self.helper.layout = Layout(
+            Row(
+                Column("title", css_class="form-group col-md-6 mb-0"),
+                Column(
+                    "tags",
+                    css_class="form-group col-md-6 mb-0",
+                ),
+                css_class="form-row",
+            ),
+            Field("description"),
+            Field("extra_fields"),
+            ButtonHolder(
+                Submit("submit_btn", "Submit", css_class="btn btn-primary col-md-4"),
+                HTML(
+                    """
+                    <button onclick="window.location.href='{{ cancel_link }}'" class="btn btn-outline-secondary col-md-4" type="button">Cancel</button>
+                    """
+                ),
+            ),
+        )
+
+
+class ReportObservationLinkUpdateForm(forms.ModelForm):
+    """
+    Update an individual :model:`reporting.ReportObservationLink` associated with an
+    individual :model:`reporting.Report`.
+    """
+
+    # Note: since ReportObservationLinks are essentialy an observation bound to a report, it uses
+    # the observation's extra field specifications, rather than having its own.
+    extra_fields = ExtraFieldsField(Observation._meta.label)
+
+    class Meta:
+        model = ReportObservationLink
+        exclude = (
+            "report",
+            "position",
+            "added_as_blank",
+        )
+        field_classes = {
+            "description": JinjaRichTextField,
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields:
+            self.fields[field].widget.attrs["autocomplete"] = "off"
+        self.fields["title"].widget.attrs["placeholder"] = "Observation Title"
+        self.fields["description"].widget.attrs["placeholder"] = "What is this ..."
+        self.fields["tags"].widget.attrs["placeholder"] = "ATT&CK:T1555, privesc, ..."
+        self.fields["extra_fields"].label = ""
+
+        self.helper = FormHelper()
+        self.helper.form_show_labels = True
+        self.helper.form_method = "post"
+        self.helper.form_id = "report-observation-form"
+        self.helper.layout = Layout(
+            Row(
+                Column("title", css_class="form-group col-md-6 mb-0"),
+                Column("tags", css_class="form-group col-md-6 mb-0"),
+                css_class="form-row",
+            ),
+            Field("description", css_class="enable-evidence-upload"),
+            Field("extra_fields"),
+            ButtonHolder(
+                Submit("submit_btn", "Submit", css_class="btn btn-primary col-md-4"),
+                HTML(
+                    """
+                    <button onclick="window.location.href='{{ cancel_link }}'"
+                    class="btn btn-outline-secondary col-md-4" type="button">Cancel
+                    </button>
+                    """
+                ),
+            ),
+        )

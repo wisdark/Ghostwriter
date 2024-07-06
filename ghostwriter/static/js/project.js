@@ -8,6 +8,7 @@ function displayToastTop({
                              delay = 3,
                              escapeHTML = true,
                              context = null,
+                             url = '',
                          }) {
     if (context !== null) {
         if (context === 'form') {
@@ -20,6 +21,11 @@ function displayToastTop({
     toastr.options.escapeHtml = escapeHTML;
     toastr.options.progressBar = true;
     toastr.options.closeButton = true;
+    if (url !== '') {
+        toastr.options.onclick = function () {
+            window.location.href = url;
+        }
+    }
     let msg;
     if (type === 'success') {
         if (title === '') {
@@ -201,5 +207,18 @@ function renderPreview(fileInput, previewDiv) {
 // Escape HTML characters in a string to make it safe for display
 const escapeHtml = (unsafe) => {
     return unsafe.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;');
+}
+
+
+function update_project_contacts() {
+  // Get the update URL from the ``nav-tabs`` element
+  let $contactsSection = $('#project-contacts');
+  let update_url = $contactsSection.attr('js-update-contacts-url');
+  if (update_url != null) {
+    console.log("Updating contacts...");
+    // Refresh the HTML from the update URL
+    $contactsSection.html('').load(update_url, function () {
+    });
+  }
 }
 

@@ -1,4 +1,4 @@
-"""This contains utilities and values used by the ``TemplateLinter`` class."""
+"""This contains utilities and values used by template linting."""
 
 # Example JSON reporting data for loading into templates for rendering tests
 LINTER_CONTEXT = {
@@ -25,6 +25,7 @@ LINTER_CONTEXT = {
         "start_time": "09:00:00",
         "end_time": "17:00:00",
         "tags": ["tag1", "tag2", "tag3"],
+        "extra_fields": {},
     },
     "client": {
         "id": 1,
@@ -56,6 +57,7 @@ LINTER_CONTEXT = {
         "address": "30 Rockefeller Plaza New York City, New York 10112",
         "address_rt": "",
         "tags": ["tag1", "tag2", "tag3"],
+        "extra_fields": {},
     },
     "team": [
         {
@@ -225,6 +227,7 @@ LINTER_CONTEXT = {
                 ],
                 "note": "<p>Domain for the first phishing campaign</p>",
                 "note_rt": "",
+                "extra_fields": {},
             },
             {
                 "activity": "Command and Control",
@@ -241,6 +244,7 @@ LINTER_CONTEXT = {
                 ],
                 "note": "<p>Domain for long-haul C2 comms</p>",
                 "note_rt": "",
+                "extra_fields": {},
             },
             {
                 "activity": "Command and Control",
@@ -257,6 +261,7 @@ LINTER_CONTEXT = {
                 ],
                 "note": "<p>Domain for the short-haul C2 comms (phishing)</p>",
                 "note_rt": "",
+                "extra_fields": {},
             },
         ],
         "servers": [
@@ -271,6 +276,7 @@ LINTER_CONTEXT = {
                 "dns": [{"domain": "ghostwriter.wiki", "endpoint": "", "subdomain": "www"}],
                 "note": "<p>Long-haul C2 server</p>",
                 "note_rt": "",
+                "extra_fields": {},
             },
             {
                 "name": "CC-02",
@@ -289,6 +295,7 @@ LINTER_CONTEXT = {
                 ],
                 "note": "<p>Short-haul C2 server for phishing</p>",
                 "note_rt": "",
+                "extra_fields": {},
             },
         ],
         "cloud": [
@@ -306,6 +313,7 @@ LINTER_CONTEXT = {
     },
     "findings": [
         {
+            "id": 1,
             "assigned_to": "Benny the Ghost",
             "finding_type": "Network",
             "severity": "Critical",
@@ -348,10 +356,22 @@ LINTER_CONTEXT = {
             "network_detection_techniques_rt": "",
             "references": "",
             "references_rt": "",
+            "mitigation": "",
             "finding_guidance": "",
             "complete": False,
             "tags": ["tag1", "tag2", "tag3"],
+            "extra_fields": {},
         },
+    ],
+    "observations": [
+        {
+            "id": 1,
+            "title": "test observation",
+            "description": "",
+            "description_rt": "",
+            "tags": ["tag1", "tag2", "tag3"],
+            "extra_fields": {},
+        }
     ],
     "docx_template": {
         "id": 1,
@@ -367,8 +387,82 @@ LINTER_CONTEXT = {
         "doc_type": 2,
         "tags": ["tag1", "tag2", "tag3"],
     },
+    "logs": [
+        {
+            "entries": [
+                {
+                    "tags": ["tag1", "tag2", "tag3"],
+                    "start_date": "2023-03-23T17:09:00Z",
+                    "end_date": "2023-03-23T17:10:02Z",
+                    "source_ip": "DEBIAN-DEV (192.168.85.132)",
+                    "dest_ip": "",
+                    "tool": "poseidon",
+                    "user_context": "cmaddalena",
+                    "command": "help",
+                    "description": "",
+                    "output": "",
+                    "comments": "",
+                    "operator_name": "mythic_admin",
+                    "extra_fields": {},
+                },
+                {
+                    "tags": ["tag1", "tag2", "tag3"],
+                    "start_date": "2023-03-20T21:32:31Z",
+                    "end_date": "2023-03-20T21:32:31Z",
+                    "source_ip": "DEBIAN-DEV (192.168.85.132)",
+                    "dest_ip": "",
+                    "tool": "poseidon",
+                    "user_context": "cmaddalena",
+                    "command": "help ",
+                    "description": "",
+                    "output": "",
+                    "comments": "",
+                    "operator_name": "mythic_admin",
+                    "extra_fields": {},
+                },
+            ],
+            "name": "SpecterOps Red Team Logs",
+        },
+        {
+            "entries": [
+                {
+                    "tags": ["tag1", "tag2", "tag3"],
+                    "start_date": "2023-03-23T17:09:00Z",
+                    "end_date": "2023-03-23T17:10:02Z",
+                    "source_ip": "DEBIAN-DEV (192.168.85.132)",
+                    "dest_ip": "",
+                    "tool": "poseidon",
+                    "user_context": "cmaddalena",
+                    "command": "help",
+                    "description": "",
+                    "output": "",
+                    "comments": "",
+                    "operator_name": "mythic_admin",
+                    "extra_fields": {},
+                },
+                {
+                    "tags": ["tag1", "tag2", "tag3"],
+                    "start_date": "2023-03-20T21:32:31Z",
+                    "end_date": "2023-03-20T21:32:31Z",
+                    "source_ip": "DEBIAN-DEV (192.168.85.132)",
+                    "dest_ip": "",
+                    "tool": "poseidon",
+                    "user_context": "cmaddalena",
+                    "command": "help ",
+                    "description": "",
+                    "output": "",
+                    "comments": "",
+                    "operator_name": "mythic_admin",
+                    "extra_fields": {},
+                },
+            ],
+            "name": "SpecterOps Red Team Log #2",
+        },
+    ],
     "company": {
         "name": "SpecterOps",
+        "short_name": "SO",
+        "address": "14 N Moore St, New York, NY 10013",
         "twitter": "@specterops",
         "email": "info@specterops.io",
     },
@@ -389,4 +483,19 @@ LINTER_CONTEXT = {
         "team": 2,
         "targets": 1,
     },
+    "tools": ["beacon", "covenant", "mythic", "poseidon"],
+    "evidence": [
+        {
+            "id": 1,
+            "file_path": "evidence/2/ghost.png",
+            "url": "/media/evidence/2/ghost.png",
+            "document": "/media/evidence/2/ghost.png",
+            "friendly_name": "Ghostwriter",
+            "upload_date": "2021-03-22",
+            "caption": "Brief Caption for This Evidence",
+            "description": "",
+            "tags": ["tag1", "tag2", "tag3"],
+        }
+    ],
+    "extra_fields": {},
 }

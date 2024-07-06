@@ -3,9 +3,12 @@ table:
   schema: public
 configuration:
   column_config:
+    extra_fields:
+      custom_name: extraFields
     short_name:
       custom_name: shortName
   custom_column_names:
+    extra_fields: extraFields
     short_name: shortName
   custom_name: client
   custom_root_fields: {}
@@ -66,74 +69,24 @@ insert_permissions:
       columns:
         - address
         - codename
+        - extra_fields
         - name
         - note
         - short_name
         - timezone
-  - role: restricted
-    permission:
-      check:
-        _and:
-          - _exists:
-              _table:
-                name: users_user_groups
-                schema: public
-              _where:
-                _and:
-                  - user_id:
-                      _eq: X-Hasura-User-Id
-                  - authGroup:
-                      groupPermissions:
-                        authPermission:
-                          codename:
-                            _eq: add_clientcontact
-      columns: []
-  - role: user
-    permission:
-      check:
-        _and:
-          - _exists:
-              _table:
-                name: users_user_groups
-                schema: public
-              _where:
-                _and:
-                  - user_id:
-                      _eq: X-Hasura-User-Id
-                  - authGroup:
-                      groupPermissions:
-                        authPermission:
-                          codename:
-                            _eq: add_clientcontact
-      columns: []
 select_permissions:
   - role: manager
     permission:
       columns:
+        - address
+        - codename
+        - extra_fields
         - id
         - name
-        - short_name
-        - codename
         - note
-        - address
+        - short_name
         - timezone
       filter: {}
-  - role: restricted
-    permission:
-      columns: '*'
-      filter:
-        _or:
-          - invites:
-              user_id:
-                _eq: X-Hasura-User-Id
-          - projects:
-              _or:
-                - assignments:
-                    operator_id:
-                      _eq: X-Hasura-User-Id
-                - invites:
-                    user_id:
-                      _eq: X-Hasura-User-Id
   - role: user
     permission:
       columns: '*'
@@ -156,82 +109,13 @@ update_permissions:
       columns:
         - address
         - codename
+        - extra_fields
         - name
         - note
         - short_name
         - timezone
       filter: {}
       check: {}
-  - role: restricted
-    permission:
-      columns:
-        - address
-        - codename
-        - name
-        - note
-        - short_name
-        - timezone
-      filter:
-        _or:
-          - invites:
-              user_id:
-                _eq: X-Hasura-User-Id
-          - projects:
-              _or:
-                - assignments:
-                    operator_id:
-                      _eq: X-Hasura-User-Id
-                - invites:
-                    user_id:
-                      _eq: X-Hasura-User-Id
-      check:
-        _or:
-          - invites:
-              user_id:
-                _eq: X-Hasura-User-Id
-          - projects:
-              _or:
-                - assignments:
-                    operator_id:
-                      _eq: X-Hasura-User-Id
-                - invites:
-                    user_id:
-                      _eq: X-Hasura-User-Id
-  - role: user
-    permission:
-      columns:
-        - address
-        - codename
-        - name
-        - note
-        - short_name
-        - timezone
-      filter:
-        _or:
-          - invites:
-              user_id:
-                _eq: X-Hasura-User-Id
-          - projects:
-              _or:
-                - assignments:
-                    operator_id:
-                      _eq: X-Hasura-User-Id
-                - invites:
-                    user_id:
-                      _eq: X-Hasura-User-Id
-      check:
-        _or:
-          - invites:
-              user_id:
-                _eq: X-Hasura-User-Id
-          - projects:
-              _or:
-                - assignments:
-                    operator_id:
-                      _eq: X-Hasura-User-Id
-                - invites:
-                    user_id:
-                      _eq: X-Hasura-User-Id
 delete_permissions:
   - role: manager
     permission:

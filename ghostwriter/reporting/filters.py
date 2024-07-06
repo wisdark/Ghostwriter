@@ -11,7 +11,15 @@ from crispy_forms.helper import FormHelper
 from crispy_forms.layout import HTML, ButtonHolder, Column, Div, Layout, Row, Submit
 
 # Ghostwriter Libraries
-from ghostwriter.reporting.models import Archive, Finding, FindingType, Report, Severity
+from ghostwriter.reporting.models import (
+    Archive,
+    Finding,
+    FindingType,
+    Observation,
+    Report,
+    ReportTemplate,
+    Severity,
+)
 
 
 class FindingFilter(django_filters.FilterSet):
@@ -26,12 +34,14 @@ class FindingFilter(django_filters.FilterSet):
         Checkbox choice filter using :model:`reporting.Severity`.
     ``finding_type``
         Multiple choice filter using :model:`reporting.FindingType`.
+    ``tags``
+        Search of the tags field contents.
     """
 
     title = django_filters.CharFilter(
         lookup_expr="icontains",
-        label="Title Contains",
-        widget=TextInput(attrs={"placeholder": "Part of Title", "autocomplete": "off"}),
+        label="Finding Title Contains",
+        widget=TextInput(attrs={"placeholder": "Partial Finding Title", "autocomplete": "off"}),
     )
     severity = django_filters.ModelMultipleChoiceFilter(
         queryset=Severity.objects.all().order_by("weight"),
@@ -43,6 +53,16 @@ class FindingFilter(django_filters.FilterSet):
         widget=forms.CheckboxSelectMultiple,
         label="",
     )
+    tags = django_filters.CharFilter(
+        method="search_tags",
+        label="Finding Tags Contain",
+        widget=TextInput(
+            attrs={
+                "placeholder": "Finding Tag",
+                "autocomplete": "off",
+            }
+        ),
+    )
 
     class Meta:
         model = Finding
@@ -52,28 +72,31 @@ class FindingFilter(django_filters.FilterSet):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "get"
-        self.helper.form_show_labels = False
         # Layout the form for Bootstrap
         self.helper.layout = Layout(
             Div(
                 Row(
                     Column(
                         PrependedText("title", '<i class="fas fa-filter"></i>'),
-                        css_class="form-group col-md-6 offset-md-3 mb-0",
+                        css_class="col-md-4 offset-md-2 mb-0",
+                    ),
+                    Column(
+                        PrependedText("tags", '<i class="fas fa-tag"></i>'),
+                        css_class="col-md-4 mb-0",
                     ),
                     css_class="form-row",
                 ),
                 Row(
                     Column(
                         InlineCheckboxes("severity"),
-                        css_class="form-group col-md-12 m-1",
+                        css_class="col-md-12 m-1",
                     ),
                     css_class="form-row",
                 ),
                 Row(
                     Column(
                         InlineCheckboxes("finding_type"),
-                        css_class="form-group col-md-12 m-1",
+                        css_class="col-md-12 m-1",
                     ),
                     css_class="form-row",
                 ),
@@ -94,6 +117,79 @@ class FindingFilter(django_filters.FilterSet):
             ),
         )
 
+    def search_tags(self, queryset, name, value):
+        """Filter findings by tags."""
+        return queryset.filter(tags__name__in=[value]).distinct()
+
+
+class ObservationFilter(django_filters.FilterSet):
+    """
+    Filter :model:`reporting.Observation` model for searching.
+
+    **Fields**
+
+    ``title``
+        Case insensitive search of the title field contents.
+    """
+
+    title = django_filters.CharFilter(
+        lookup_expr="icontains",
+        label="Observation Title Contains",
+        widget=TextInput(attrs={"placeholder": "Observation Title Contains", "autocomplete": "off"}),
+    )
+    tags = django_filters.CharFilter(
+        method="search_tags",
+        label="Observation Tags Contain",
+        widget=TextInput(
+            attrs={
+                "placeholder": "Observation Tag",
+                "autocomplete": "off",
+            }
+        ),
+    )
+
+    class Meta:
+        model = Observation
+        fields = ["title"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "get"
+        self.helper.layout = Layout(
+            Div(
+                Row(
+                    Column(
+                        PrependedText("title", '<i class="fas fa-filter"></i>'),
+                        css_class="col-md-4 offset-md-2 mb-0",
+                    ),
+                    Column(
+                        PrependedText("tags", '<i class="fas fa-tag"></i>'),
+                        css_class="col-md-4 mb-0",
+                    ),
+                    css_class="form-row",
+                ),
+                ButtonHolder(
+                    HTML(
+                        """
+                        <a class="btn btn-info col-md-2" role="button" href="{%  url 'reporting:observation_create' %}">Create</a>
+                        """
+                    ),
+                    Submit("submit_btn", "Filter", css_class="col-md-2"),
+                    HTML(
+                        """
+                        <a class="btn btn-outline-secondary col-md-2" role="button" href="{%  url 'reporting:observations' %}">Reset</a>
+                        """
+                    ),
+                ),
+                css_class="justify-content-center",
+            ),
+        )
+
+    def search_tags(self, queryset, name, value):
+        """Filter observation by tags."""
+        return queryset.filter(tags__name__in=[value]).distinct()
+
 
 class ReportFilter(django_filters.FilterSet):
     """
@@ -103,14 +199,26 @@ class ReportFilter(django_filters.FilterSet):
 
     ``title``
         Case insensitive search of the title field contents.
+    ``tags``
+        Search of the tags field contents.
     ``complete``
         Boolean field to filter completed reports.
     """
 
     title = django_filters.CharFilter(
         lookup_expr="icontains",
-        label="Title Contains",
-        widget=TextInput(attrs={"placeholder": "Part of Title", "autocomplete": "off"}),
+        label="Report Title Contains",
+        widget=TextInput(attrs={"placeholder": "Partial Report Title", "autocomplete": "off"}),
+    )
+    tags = django_filters.CharFilter(
+        method="search_tags",
+        label="Report Tags Contain",
+        widget=TextInput(
+            attrs={
+                "placeholder": "Report Tag",
+                "autocomplete": "off",
+            }
+        ),
     )
 
     STATUS_CHOICES = (
@@ -128,18 +236,24 @@ class ReportFilter(django_filters.FilterSet):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "get"
-        self.helper.form_show_labels = False
         # Layout the form for Bootstrap
         self.helper.layout = Layout(
             Div(
                 Row(
                     Column(
                         PrependedText("title", '<i class="fas fa-filter"></i>'),
-                        css_class="form-group col-md-6",
+                        css_class="col-md-4",
                     ),
                     Column(
-                        "complete",
-                        css_class="form-group col-md-6",
+                        PrependedText("tags", '<i class="fas fa-tag"></i>'),
+                        css_class="col-md-4 mb-0",
+                    ),
+                    Column(
+                        PrependedText(
+                            "complete",
+                            '<i class="fas fa-toggle-on"></i>',
+                        ),
+                        css_class="col-md-4 mb-0",
                     ),
                     css_class="form-row",
                 ),
@@ -160,6 +274,10 @@ class ReportFilter(django_filters.FilterSet):
             ),
         )
 
+    def search_tags(self, queryset, name, value):
+        """Filter reports by tags."""
+        return queryset.filter(tags__name__in=[value]).distinct()
+
 
 class ArchiveFilter(django_filters.FilterSet):
     """
@@ -173,9 +291,9 @@ class ArchiveFilter(django_filters.FilterSet):
 
     client = django_filters.CharFilter(
         field_name="project__client__name",
-        label="Client Name",
+        label="Client Name Contains",
         lookup_expr="icontains",
-        widget=TextInput(attrs={"placeholder": "Part of Name", "autocomplete": "off"}),
+        widget=TextInput(attrs={"placeholder": "Partial Client Name", "autocomplete": "off"}),
     )
 
     class Meta:
@@ -186,14 +304,13 @@ class ArchiveFilter(django_filters.FilterSet):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "get"
-        self.helper.form_show_labels = False
         # Layout the form for Bootstrap
         self.helper.layout = Layout(
             Div(
                 Row(
                     Column(
                         PrependedText("client", '<i class="fas fa-filter"></i>'),
-                        css_class="form-group col-md-6 offset-md-3 mb-0",
+                        css_class="col-md-6 offset-md-3 mb-0",
                     ),
                 ),
                 ButtonHolder(
@@ -207,3 +324,115 @@ class ArchiveFilter(django_filters.FilterSet):
                 css_class="justify-content-center",
             ),
         )
+
+
+class ReportTemplateFilter(django_filters.FilterSet):
+    """
+    Filter :model:`reporting.ReportTemplate` model for searching.
+
+    **Fields**
+
+    ``name``
+        Case insensitive search of the name field contents.
+    ``doc_type``
+        Multiple choice filter using :model:`reporting.DocType`.
+    ``tags``
+        Search of the tags field contents.
+    ``protected``
+        Boolean field to filter protected report templates.
+    """
+
+    name = django_filters.CharFilter(
+        lookup_expr="icontains",
+        label="Report Title Contains",
+        widget=TextInput(attrs={"placeholder": "Partial Report Title", "autocomplete": "off"}),
+    )
+    client = django_filters.CharFilter(
+        field_name="client__name",
+        label="Client Name Contains",
+        lookup_expr="icontains",
+        widget=TextInput(attrs={"placeholder": "Partial Client Name", "autocomplete": "off"}),
+    )
+    tags = django_filters.CharFilter(
+        method="search_tags",
+        label="Template Tags Contain",
+        widget=TextInput(
+            attrs={
+                "placeholder": "Report Tag",
+                "autocomplete": "off",
+            }
+        ),
+    )
+
+    DOC_TYPE_CHOICES = (
+        (1, "DOCX"),
+        (2, "PPTX"),
+    )
+
+    doc_type = django_filters.ChoiceFilter(choices=DOC_TYPE_CHOICES, empty_label="All Templates", label="Document Type")
+
+    PROTECTED_CHOICES = (
+        (0, "Not Protected"),
+        (1, "Protected"),
+    )
+
+    protected = django_filters.ChoiceFilter(
+        choices=PROTECTED_CHOICES, empty_label="All Projects", label="Project Status"
+    )
+
+    class Meta:
+        model = ReportTemplate
+        fields = ["name", "doc_type", "protected"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_method = "get"
+        # Layout the form for Bootstrap
+        self.helper.layout = Layout(
+            Div(
+                Row(
+                    Column(
+                        PrependedText("name", '<i class="fas fa-filter"></i>'),
+                        css_class="col-md-6",
+                    ),
+                    Column(
+                        PrependedText(
+                            "doc_type",
+                            '<i class="fas fa-file-alt"></i>',
+                        ),
+                        css_class="col-md-6 mb-0",
+                    ),
+                    css_class="form-row",
+                ),
+                Row(
+                    Column(
+                        PrependedText("client", '<i class="fas fa-filter"></i>'),
+                        css_class="col-md-6",
+                    ),
+                    Column(
+                        PrependedText("tags", '<i class="fas fa-tag"></i>'),
+                        css_class="col-md-6 mb-0",
+                    ),
+                    css_class="form-row",
+                ),
+                ButtonHolder(
+                    HTML(
+                        """
+                        <a class="btn btn-info" href="{% url 'reporting:template_create' %}">Upload a Report Template</a>
+                        """
+                    ),
+                    Submit("submit_btn", "Filter", css_class="btn btn-primary col-md-2"),
+                    HTML(
+                        """
+                        <a class="btn btn-outline-secondary col-md-2" role="button" href="{%  url 'reporting:templates' %}">Reset</a>
+                        """
+                    ),
+                ),
+                css_class="justify-content-center",
+            ),
+        )
+
+    def search_tags(self, queryset, name, value):
+        """Filter reports by tags."""
+        return queryset.filter(tags__name__in=[value]).distinct()

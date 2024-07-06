@@ -1,33 +1,48 @@
 # Standard Libraries
 import logging
+import os
 from datetime import date, datetime, timedelta
 
 # Django Imports
 from django.conf import settings
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.encoding import force_str
+
+# 3rd Party Libraries
+import factory
+from django_otp.plugins.otp_static.models import StaticToken
 
 # Ghostwriter Libraries
 from ghostwriter.api import utils
 from ghostwriter.api.models import APIKey
 from ghostwriter.factories import (
     ActivityTypeFactory,
+    BlankReportFindingLinkFactory,
+    ClientFactory,
+    EvidenceOnReportFactory,
     DomainFactory,
     DomainStatusFactory,
-    EvidenceFactory,
+    EvidenceOnFindingFactory,
+    ExtraFieldModelFactory,
+    ExtraFieldSpecFactory,
     FindingFactory,
     HistoryFactory,
     OplogEntryFactory,
     ProjectAssignmentFactory,
+    ProjectContactFactory,
     ProjectFactory,
+    ProjectObjectiveFactory,
+    ProjectSubtaskFactory,
     ReportFactory,
     ReportFindingLinkFactory,
     ReportTemplateFactory,
     ServerHistoryFactory,
     ServerRoleFactory,
     ServerStatusFactory,
+    SeverityFactory,
     StaticServerFactory,
     UserFactory,
 )
@@ -364,6 +379,13 @@ class HasuraLoginTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.user = UserFactory(password=PASSWORD)
+
+        cls.user_2fa = UserFactory(password=PASSWORD)
+        cls.user_2fa_required = UserFactory(password=PASSWORD, require_2fa=True)
+        cls.user_2fa.totpdevice_set.create()
+        static_model = cls.user_2fa.staticdevice_set.create()
+        static_model.token_set.create(token=StaticToken.random_token())
+
         cls.uri = reverse("api:graphql_login")
 
     def setUp(self):
@@ -391,6 +413,38 @@ class HasuraLoginTests(TestCase):
                 "code": "InvalidCredentials",
             },
         }
+        response = self.client.post(
+            self.uri,
+            data=data,
+            content_type="application/json",
+            **{
+                "HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}",
+            },
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertJSONEqual(force_str(response.content), result)
+
+    def test_graphql_login_with_2fa(self):
+        result = {
+            "message": "Login and generate a token from your user profile",
+            "extensions": {
+                "code": "2FARequired",
+            },
+        }
+
+        data = {"input": {"username": f"{self.user_2fa.username}", "password": f"{PASSWORD}"}}
+        response = self.client.post(
+            self.uri,
+            data=data,
+            content_type="application/json",
+            **{
+                "HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}",
+            },
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertJSONEqual(force_str(response.content), result)
+
+        data = {"input": {"username": f"{self.user_2fa_required.username}", "password": f"{PASSWORD}"}}
         response = self.client.post(
             self.uri,
             data=data,
@@ -584,7 +638,8 @@ class HasuraCheckoutTests(TestCase):
 
     def test_graphql_checkout_domain(self):
         _, token = utils.generate_jwt(self.user)
-        data = self.generate_domain_data(self.project.pk, self.domain.pk, self.activity.pk, note="Test note")
+        data = self.generate_domain_data(self.project.pk, self.domain.pk, self.activity.pk)
+        del data["input"]["note"]
         response = self.client.post(
             self.domain_uri,
             data=data,
@@ -603,9 +658,8 @@ class HasuraCheckoutTests(TestCase):
 
     def test_graphql_checkout_server(self):
         _, token = utils.generate_jwt(self.user)
-        data = self.generate_server_data(
-            self.project.pk, self.server.pk, self.activity.pk, self.server_role.pk, note="Test note"
-        )
+        data = self.generate_server_data(self.project.pk, self.server.pk, self.activity.pk, self.server_role.pk)
+        del data["input"]["note"]
         response = self.client.post(
             self.server_uri,
             data=data,
@@ -925,71 +979,6 @@ class CheckoutDeleteViewTests(TestCase):
         self.assertJSONEqual(force_str(response.content), result)
 
 
-class GraphqlDeleteEvidenceActionTests(TestCase):
-    """Collection of tests for :view:`GraphqlDeleteEvidenceAction`."""
-
-    @classmethod
-    def setUpTestData(cls):
-        cls.Evidence = EvidenceFactory._meta.model
-
-        cls.user = UserFactory(password=PASSWORD)
-        cls.uri = reverse("api:graphql_delete_evidence")
-
-        cls.project = ProjectFactory()
-        cls.other_project = ProjectFactory()
-        ProjectAssignmentFactory(operator=cls.user, project=cls.project)
-
-        cls.report = ReportFactory(project=cls.project)
-        cls.other_report = ReportFactory(project=cls.other_project)
-
-        cls.finding = ReportFindingLinkFactory(report=cls.report)
-        cls.other_finding = ReportFindingLinkFactory(report=cls.other_report)
-
-        cls.evidence = EvidenceFactory(finding=cls.finding)
-        cls.other_evidence = EvidenceFactory(finding=cls.other_finding)
-
-    def setUp(self):
-        self.client = Client()
-
-    def generate_data(self, evidence_id):
-        return {
-            "input": {
-                "evidenceId": evidence_id,
-            }
-        }
-
-    def test_deleting_evidence(self):
-        _, token = utils.generate_jwt(self.user)
-        response = self.client.post(
-            self.uri,
-            data=self.generate_data(self.evidence.id),
-            content_type="application/json",
-            **{"HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}", "HTTP_AUTHORIZATION": f"Bearer {token}"},
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(self.Evidence.objects.filter(id=self.evidence.id).exists())
-
-    def test_deleting_evidence_with_invalid_id(self):
-        _, token = utils.generate_jwt(self.user)
-        response = self.client.post(
-            self.uri,
-            data=self.generate_data(999),
-            content_type="application/json",
-            **{"HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}", "HTTP_AUTHORIZATION": f"Bearer {token}"},
-        )
-        self.assertEqual(response.status_code, 400)
-
-    def test_deleting_evidence_without_access(self):
-        _, token = utils.generate_jwt(self.user)
-        response = self.client.post(
-            self.uri,
-            data=self.generate_data(self.other_evidence.id),
-            content_type="application/json",
-            **{"HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}", "HTTP_AUTHORIZATION": f"Bearer {token}"},
-        )
-        self.assertEqual(response.status_code, 401)
-
-
 class GraphqlDeleteReportTemplateAction(TestCase):
     """Collection of tests for :view:`GraphqlDeleteReportTemplateAction`."""
 
@@ -1003,6 +992,8 @@ class GraphqlDeleteReportTemplateAction(TestCase):
 
         cls.template = ReportTemplateFactory()
         cls.protected_template = ReportTemplateFactory(protected=True)
+        cls.client = ClientFactory()
+        cls.client_template = ReportTemplateFactory(client=cls.client)
 
     def setUp(self):
         self.client = Client()
@@ -1050,6 +1041,14 @@ class GraphqlDeleteReportTemplateAction(TestCase):
         response = self.client.post(
             self.uri,
             data=self.generate_data(self.protected_template.id),
+            content_type="application/json",
+            **{"HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}", "HTTP_AUTHORIZATION": f"Bearer {token}"},
+        )
+        self.assertEqual(response.status_code, 401)
+
+        response = self.client.post(
+            self.uri,
+            data=self.generate_data(self.client_template.id),
             content_type="application/json",
             **{"HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}", "HTTP_AUTHORIZATION": f"Bearer {token}"},
         )
@@ -1148,6 +1147,97 @@ class GraphqlAttachFindingAction(TestCase):
         self.assertEqual(response.status_code, 401)
 
 
+class GraphqlGenerateCodenameActionTests(TestCase):
+    """Collection of tests for :view:`GraphqlGenerateCodenameAction`."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = UserFactory(password=PASSWORD)
+        cls.uri = reverse("api:graphql_generate_codename")
+
+    def setUp(self):
+        self.client = Client()
+
+    def test_generating_codename(self):
+        _, token = utils.generate_jwt(self.user)
+        response = self.client.post(
+            self.uri,
+            content_type="application/json",
+            **{"HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}", "HTTP_AUTHORIZATION": f"Bearer {token}"},
+        )
+        self.assertEqual(response.status_code, 200)
+
+
+class GraphqlGetExtraFieldSpecActionTests(TestCase):
+    """Collection of tests for :view:`api:GraphqlGetExtraFieldSpecAction`."""
+
+    fixtures = ["ghostwriter/commandcenter/fixtures/initial.json"]
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.ExtraFieldModel = ExtraFieldModelFactory._meta.model
+        cls.user = UserFactory(password=PASSWORD)
+        cls.uri = reverse("api:graphql_get_extra_field_spec")
+
+    def setUp(self):
+        self.client = Client()
+        self.client_auth = Client()
+        self.client_auth.login(username=self.user.username, password=PASSWORD)
+        self.assertTrue(self.client_auth.login(username=self.user.username, password=PASSWORD))
+
+    def test_graphql_get_extra_field_spec(self):
+        _, token = utils.generate_jwt(self.user)
+        response = self.client.post(
+            self.uri,
+            content_type="application/json",
+            data={"input": {"model": "finding"}},
+            **{"HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}", "HTTP_AUTHORIZATION": f"Bearer {token}"},
+        )
+        self.assertEqual(response.status_code, 200)
+
+        response = self.client.post(
+            self.uri,
+            content_type="application/json",
+            data={"input": {"model": "Finding"}},
+            **{"HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}", "HTTP_AUTHORIZATION": f"Bearer {token}"},
+        )
+        self.assertEqual(response.status_code, 200)
+
+        response = self.client.post(
+            self.uri,
+            content_type="application/json",
+            data={"input": {"model": "Reporting.Finding"}},
+            **{"HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}", "HTTP_AUTHORIZATION": f"Bearer {token}"},
+        )
+        self.assertEqual(response.status_code, 200)
+
+        extra_field_model = self.ExtraFieldModel.objects.get(pk="reporting.Finding")
+        ExtraFieldSpecFactory(
+            internal_name="test_field",
+            display_name="Test Field",
+            type="single_line_text",
+            target_model=extra_field_model,
+        )
+
+        response = self.client.post(
+            self.uri,
+            content_type="application/json",
+            data={"input": {"model": "finding"}},
+            **{"HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}", "HTTP_AUTHORIZATION": f"Bearer {token}"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["extraFieldSpec"]["test_field"]["internalName"], "test_field")
+
+        response = self.client.post(
+            self.uri,
+            content_type="application/json",
+            data={"input": {"model": "bad_model_name"}},
+            **{"HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}", "HTTP_AUTHORIZATION": f"Bearer {token}"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["message"], "Model does not exist")
+
+
 # Tests related to Hasura Event Triggers
 
 
@@ -1158,7 +1248,9 @@ class GraphqlDomainUpdateEventTests(TestCase):
     def setUpTestData(cls):
         cls.user = UserFactory(password=PASSWORD)
         cls.uri = reverse("api:graphql_domain_update_event")
-        cls.domain = DomainFactory(name="chrismaddalena.com")
+        cls.available_status = DomainStatusFactory(domain_status="Available")
+        cls.expired_status = DomainStatusFactory(domain_status="Expired")
+        cls.domain = DomainFactory(name="chrismaddalena.com", domain_status=cls.expired_status)
         cls.sample_data = {
             "event": {
                 "data": {
@@ -1173,7 +1265,7 @@ class GraphqlDomainUpdateEventTests(TestCase):
                         "vt_permalink": "",
                         "burned_explanation": "",
                         "creation": "2010-03-25",
-                        "domain_status_id": cls.domain.domain_status.id,
+                        "domain_status_id": cls.expired_status.id,
                         "last_used_by_id": "",
                         "name": "Chrismaddalena.com",
                         "categorization": "",
@@ -1202,6 +1294,26 @@ class GraphqlDomainUpdateEventTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.domain.refresh_from_db()
         self.assertEqual(self.domain.name, "chrismaddalena.com")
+        self.assertEqual(self.domain.domain_status, self.expired_status)
+        self.assertTrue(self.domain.expired)
+
+        self.domain.domain_status = self.available_status
+        self.domain.save()
+
+        self.sample_data["event"]["data"]["new"]["domain_status_id"] = self.available_status.id
+        response = self.client.post(
+            self.uri,
+            content_type="application/json",
+            data=self.sample_data,
+            **{
+                "HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}",
+            },
+        )
+        self.domain.refresh_from_db()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.domain.domain_status, self.available_status)
+        self.assertFalse(self.domain.expired)
 
 
 class GraphqlOplogEntryEventTests(TestCase):
@@ -1315,6 +1427,609 @@ class GraphqlOplogEntryEventTests(TestCase):
         self.assertEqual(response.status_code, 200)
 
 
+class GraphqlReportFindingEventTests(TestCase):
+    """
+    Collection of tests for :view:`api:GraphqlReportFindingChangeEvent` and
+    :view:`api:GraphqlReportFindingDeleteEvent`.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.ReportFindingLink = ReportFindingLinkFactory._meta.model
+        cls.user = UserFactory(password=PASSWORD)
+
+        cls.critical_severity = SeverityFactory(severity="Critical", weight=0)
+        cls.high_severity = SeverityFactory(severity="High", weight=1)
+
+        cls.report = ReportFactory()
+
+        cls.change_uri = reverse("api:graphql_reportfinding_change_event")
+        cls.delete_uri = reverse("api:graphql_reportfinding_delete_event")
+
+    def setUp(self):
+        self.client = Client()
+
+    def test_model_cleaning_position(self):
+        self.ReportFindingLink.objects.all().delete()
+        first_finding = ReportFindingLinkFactory(report=self.report, severity=self.critical_severity, position=1)
+        second_finding = ReportFindingLinkFactory(report=self.report, severity=self.critical_severity, position=2)
+        third_finding = ReportFindingLinkFactory(report=self.report, severity=self.critical_severity, position=3)
+
+        # Simulate an event changing the position of the first finding to `3`
+        first_finding.position = 3
+        first_finding.save()
+        sample_data = {
+            "event": {
+                "op": "UPDATE",
+                "data": {
+                    "old": {
+                        "id": first_finding.id,
+                        "position": 1,
+                        "severity_id": first_finding.severity.id,
+                    },
+                    "new": {
+                        "id": first_finding.id,
+                        "position": 3,
+                        "severity_id": first_finding.severity.id,
+                    },
+                },
+            },
+        }
+
+        # Submit the POST request to the event webhook
+        response = self.client.post(
+            self.change_uri,
+            content_type="application/json",
+            data=sample_data,
+            **{
+                "HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        first_finding.refresh_from_db()
+        self.assertEqual(first_finding.position, 3)
+        second_finding.refresh_from_db()
+        self.assertEqual(second_finding.position, 1)
+        third_finding.refresh_from_db()
+        self.assertEqual(third_finding.position, 2)
+
+        # Repeat for an `UPDATE` event with a severity change
+        second_finding.severity = self.high_severity
+        second_finding.save()
+        sample_data = {
+            "event": {
+                "op": "UPDATE",
+                "data": {
+                    "old": {
+                        "id": second_finding.id,
+                        "position": second_finding.position,
+                        "severity_id": self.critical_severity.id,
+                    },
+                    "new": {
+                        "id": second_finding.id,
+                        "position": second_finding.position,
+                        "severity_id": self.high_severity.id,
+                    },
+                },
+            },
+        }
+
+        response = self.client.post(
+            self.change_uri,
+            content_type="application/json",
+            data=sample_data,
+            **{
+                "HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        first_finding.refresh_from_db()
+        second_finding.refresh_from_db()
+        third_finding.refresh_from_db()
+        self.assertEqual(second_finding.position, 1)
+        self.assertEqual(first_finding.position, 2)
+        self.assertEqual(third_finding.position, 1)
+
+        # Repeat for an `INSERT` event
+        new_finding = ReportFindingLinkFactory(report=self.report, severity=self.critical_severity)
+        sample_data = {
+            "event": {
+                "op": "INSERT",
+                "data": {
+                    "old": None,
+                    "new": {
+                        "id": new_finding.id,
+                        "position": 1,
+                        "severity_id": new_finding.severity.id,
+                    },
+                },
+            },
+        }
+
+        response = self.client.post(
+            self.change_uri,
+            content_type="application/json",
+            data=sample_data,
+            **{
+                "HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        new_finding.refresh_from_db()
+        self.assertEqual(new_finding.position, 3)
+
+    def test_position_set_to_zero(self):
+        self.ReportFindingLink.objects.all().delete()
+        finding = ReportFindingLinkFactory(report=self.report, severity=self.critical_severity, position=0)
+
+        # Simulate an event changing the position of the first finding to `0`
+        sample_data = {
+            "event": {
+                "op": "INSERT",
+                "data": {
+                    "old": None,
+                    "new": {
+                        "id": finding.id,
+                        "position": 0,
+                        "severity_id": finding.severity.id,
+                    },
+                },
+            },
+        }
+
+        # Submit the POST request to the event webhook
+        response = self.client.post(
+            self.change_uri,
+            content_type="application/json",
+            data=sample_data,
+            **{
+                "HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        finding.refresh_from_db()
+        self.assertEqual(finding.position, 1)
+
+    def test_position_set_higher_than_count(self):
+        self.ReportFindingLink.objects.all().delete()
+        finding = ReportFindingLinkFactory(report=self.report, severity=self.critical_severity, position=100)
+
+        # Simulate an event changing the position of the first finding to `100`
+        sample_data = {
+            "event": {
+                "op": "INSERT",
+                "data": {
+                    "old": None,
+                    "new": {
+                        "id": finding.id,
+                        "position": 100,
+                        "severity_id": finding.severity.id,
+                    },
+                },
+            },
+        }
+
+        # Submit the POST request to the event webhook
+        response = self.client.post(
+            self.change_uri,
+            content_type="application/json",
+            data=sample_data,
+            **{
+                "HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        finding.refresh_from_db()
+        total_findings = self.ReportFindingLink.objects.filter(report=self.report).count()
+        self.assertEqual(finding.position, total_findings)
+
+    def test_position_change_on_delete(self):
+        self.ReportFindingLink.objects.all().delete()
+
+        first_finding = ReportFindingLinkFactory(report=self.report, severity=self.critical_severity, position=1)
+        second_finding = ReportFindingLinkFactory(report=self.report, severity=self.critical_severity, position=2)
+        third_finding = ReportFindingLinkFactory(report=self.report, severity=self.critical_severity, position=3)
+
+        # Simulate an event deleting the second finding
+        second_finding.delete()
+        sample_data = {
+            "event": {
+                "op": "DELETE",
+                "data": {
+                    "old": {
+                        "id": second_finding.id,
+                        "position": 2,
+                        "severity_id": second_finding.severity.id,
+                        "report_id": second_finding.report.id,
+                    },
+                    "new": None,
+                },
+            },
+        }
+
+        # Submit the POST request to the event webhook
+        response = self.client.post(
+            self.delete_uri,
+            content_type="application/json",
+            data=sample_data,
+            **{
+                "HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        first_finding.refresh_from_db()
+        third_finding.refresh_from_db()
+        self.assertEqual(first_finding.position, 1)
+        self.assertEqual(third_finding.position, 2)
+
+
+class GraphqlProjectContactUpdateEventTests(TestCase):
+    """Collection of tests for :view:`api:GraphqlProjectContactUpdateEvent`."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = UserFactory(password=PASSWORD)
+        cls.uri = reverse("api:graphql_projectcontact_update_event")
+
+        cls.project = ProjectFactory()
+        cls.primary_contact = ProjectContactFactory(primary=True, project=cls.project)
+        cls.other_contact = ProjectContactFactory(primary=False, project=cls.project)
+        cls.sample_data = {
+            "event": {
+                "data": {
+                    "new": {
+                        "id": cls.other_contact.id,
+                        "name": cls.other_contact.name,
+                        "job_title": cls.other_contact.job_title,
+                        "email": cls.other_contact.email,
+                        "phone": cls.other_contact.phone,
+                        "note": cls.other_contact.note,
+                        "timezone": cls.other_contact.timezone,
+                        "project": cls.project.id,
+                        "primary": True,
+                    },
+                    "old": {
+                        "id": cls.other_contact.id,
+                        "name": cls.other_contact.name,
+                        "job_title": cls.other_contact.job_title,
+                        "email": cls.other_contact.email,
+                        "phone": cls.other_contact.phone,
+                        "note": cls.other_contact.note,
+                        "timezone": cls.other_contact.timezone,
+                        "project": cls.project.id,
+                        "primary": cls.other_contact.primary,
+                    },
+                },
+            }
+        }
+
+    def setUp(self):
+        self.client = Client()
+
+    def test_graphql_projectcontact_update_event(self):
+        self.assertTrue(self.primary_contact.primary)
+        self.assertFalse(self.other_contact.primary)
+
+        self.other_contact.primary = True
+        self.other_contact.save()
+
+        response = self.client.post(
+            self.uri,
+            content_type="application/json",
+            data=self.sample_data,
+            **{
+                "HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+
+        self.primary_contact.refresh_from_db()
+        self.assertFalse(self.primary_contact.primary)
+        self.other_contact.refresh_from_db()
+        self.assertTrue(self.other_contact.primary)
+
+
+class GraphqlProjectObjectiveUpdateEventTests(TestCase):
+    """Collection of tests for :view:`api:GraphqlProjectObjectiveUpdateEvent`."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = UserFactory(password=PASSWORD)
+        cls.uri = reverse("api:graphql_projectobjective_update_event")
+
+        cls.project = ProjectFactory()
+        cls.objective = ProjectObjectiveFactory(project=cls.project, complete=False)
+        cls.complete_data = {
+            "event": {
+                "data": {
+                    "new": {"id": cls.objective.id, "complete": False, "deadline": cls.objective.deadline},
+                    "old": {"id": cls.objective.id, "complete": True, "deadline": cls.objective.deadline},
+                },
+            }
+        }
+        cls.incomplete_data = {
+            "event": {
+                "data": {
+                    "new": {"id": cls.objective.id, "complete": True, "deadline": cls.objective.deadline},
+                    "old": {"id": cls.objective.id, "complete": False, "deadline": cls.objective.deadline},
+                },
+            }
+        }
+
+    def setUp(self):
+        self.client = Client()
+
+    def test_graphql_projectobjective_update_event(self):
+        self.objective.complete = True
+        self.objective.save()
+
+        response = self.client.post(
+            self.uri,
+            content_type="application/json",
+            data=self.complete_data,
+            **{
+                "HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.objective.refresh_from_db()
+        self.assertTrue(self.objective.complete)
+        self.assertEqual(self.objective.marked_complete, date.today())
+
+        self.objective.complete = False
+        self.objective.save()
+
+        subtask = ProjectSubtaskFactory(
+            complete=False,
+            parent=self.objective,
+            deadline=self.objective.deadline + timedelta(days=1),
+        )
+        self.assertEqual(subtask.deadline, self.objective.deadline + timedelta(days=1))
+
+        response = self.client.post(
+            self.uri,
+            content_type="application/json",
+            data=self.incomplete_data,
+            **{
+                "HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.objective.refresh_from_db()
+        self.assertFalse(self.objective.complete)
+        self.assertFalse(self.objective.marked_complete)
+
+        subtask.refresh_from_db()
+        self.assertEqual(subtask.deadline, self.objective.deadline)
+
+
+class GraphqlProjectSubTaskUpdateEventTests(TestCase):
+    """Collection of tests for :view:`api:GraphqlProjectSubTaskUpdateEvent`."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = UserFactory(password=PASSWORD)
+        cls.uri = reverse("api:graphql_projectsubtaske_update_event")
+
+        cls.task = ProjectSubtaskFactory(complete=False)
+        cls.complete_data = {
+            "event": {
+                "data": {
+                    "new": {"id": cls.task.id, "complete": False, "deadline": cls.task.deadline},
+                    "old": {"id": cls.task.id, "complete": True, "deadline": cls.task.deadline},
+                },
+            }
+        }
+        cls.incomplete_data = {
+            "event": {
+                "data": {
+                    "new": {"id": cls.task.id, "complete": True, "deadline": cls.task.deadline},
+                    "old": {"id": cls.task.id, "complete": False, "deadline": cls.task.deadline},
+                },
+            }
+        }
+
+    def setUp(self):
+        self.client = Client()
+
+    def test_graphql_projectsubtask_update_event(self):
+        self.task.complete = True
+        self.task.deadline = self.task.parent.deadline + timedelta(days=1)
+        self.task.save()
+
+        response = self.client.post(
+            self.uri,
+            content_type="application/json",
+            data=self.complete_data,
+            **{
+                "HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.task.refresh_from_db()
+        self.assertTrue(self.task.complete)
+        self.assertEqual(self.task.marked_complete, date.today())
+        self.assertEqual(self.task.deadline, self.task.parent.deadline)
+
+        self.task.complete = False
+        self.task.save()
+
+        response = self.client.post(
+            self.uri,
+            content_type="application/json",
+            data=self.incomplete_data,
+            **{
+                "HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.task.refresh_from_db()
+        self.assertFalse(self.task.complete)
+        self.assertFalse(self.task.marked_complete)
+
+
+class GraphqlEvidenceUpdateEventTests(TestCase):
+    """Collection of tests for :view:`api:GraphqlEvidenceUpdateEvent`."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = UserFactory(password=PASSWORD)
+        cls.uri = reverse("api:graphql_evidence_update_event")
+
+        cls.finding = ReportFindingLinkFactory(
+            description="<p>Here is some evidence:</p><p>{{.Test Finding Evidence}}</p><p>{{.ref Test Finding Evidence}}</p>",
+            impact="<p>Here is some evidence:</p><p>{{.Test Report Evidence}}</p><p>{{.ref Test Report Evidence}}</p>",
+            mitigation="<p>Here is some evidence:</p><p>{{.Deleted Evidence}}</p><p>{{.ref Deleted Evidence}}</p>",
+        )
+        cls.finding_evidence = EvidenceOnFindingFactory(
+            friendly_name="Test Finding Evidence",
+            finding=cls.finding,
+            report=None,
+            document=factory.django.FileField(filename="finding_evidence.txt", data=b"lorem ipsum"),
+        )
+        cls.report_evidence = EvidenceOnReportFactory(
+            friendly_name="Test Report Evidence",
+            report=cls.finding.report,
+            document=factory.django.FileField(filename="finding_evidence.txt", data=b"lorem ipsum"),
+        )
+        cls.deleted_evidence = EvidenceOnFindingFactory(finding=cls.finding, friendly_name="Deleted Evidence")
+
+        # Add a blank finding to teh report for regression testing updates on findings with blank fields
+        BlankReportFindingLinkFactory(report=cls.report_evidence.report)
+        EvidenceOnReportFactory(report=cls.report_evidence.report, friendly_name="Blank Test")
+
+        # Sample data for an update that changes the friendly name and document on finding evidence
+        cls.update_data_finding = {
+            "event": {
+                "op": "UPDATE",
+                "data": {
+                    "new": {
+                        "id": cls.finding_evidence.id,
+                        "document": "evidence/some_new_file.txt",
+                        "friendly_name": "New Name",
+                        "finding_id": cls.finding.id,
+                        "report_id": "",
+                    },
+                    "old": {
+                        "id": cls.finding_evidence.id,
+                        "document": str(cls.finding_evidence.document),
+                        "friendly_name": cls.finding_evidence.friendly_name,
+                        "finding_id": cls.finding.id,
+                        "report_id": "",
+                    },
+                },
+            }
+        }
+        # Sample data for an update that changes the friendly name and document on report evidence
+        cls.update_data_report = {
+            "event": {
+                "op": "UPDATE",
+                "data": {
+                    "new": {
+                        "id": cls.report_evidence.id,
+                        "document": str(cls.report_evidence.document),
+                        "friendly_name": "New Name",
+                        "finding_id": "",
+                        "report_id": cls.report_evidence.report.id,
+                    },
+                    "old": {
+                        "id": cls.report_evidence.id,
+                        "document": str(cls.report_evidence.document),
+                        "friendly_name": cls.report_evidence.friendly_name,
+                        "finding_id": "",
+                        "report_id": cls.report_evidence.report.id,
+                    },
+                },
+            }
+        }
+        # Sample data for a delete event
+        cls.delete_data = {
+            "event": {
+                "op": "DELETE",
+                "data": {
+                    "new": {},
+                    "old": {
+                        "id": cls.deleted_evidence.id,
+                        "document": str(cls.deleted_evidence.document),
+                        "friendly_name": cls.deleted_evidence.friendly_name,
+                        "finding_id": cls.finding.id,
+                        "report_id": "",
+                    },
+                },
+            }
+        }
+
+    def setUp(self):
+        self.client = Client()
+
+    def test_graphql_evidence_update_event(self):
+        # Test updating finding evidence
+        self.assertTrue(os.path.exists(self.finding_evidence.document.path))
+        response = self.client.post(
+            self.uri,
+            content_type="application/json",
+            data=self.update_data_finding,
+            **{
+                "HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}",
+            },
+        )
+
+        # The document should no longer exist
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(os.path.exists(self.finding_evidence.document.path))
+
+        # The friendly name references should be changed
+        self.finding.refresh_from_db()
+        self.assertEqual(
+            self.finding.description, "<p>Here is some evidence:</p><p>{{.New Name}}</p><p>{{.ref New Name}}</p>"
+        )
+
+        # Test updating report evidence
+        response = self.client.post(
+            self.uri,
+            content_type="application/json",
+            data=self.update_data_report,
+            **{
+                "HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.finding.refresh_from_db()
+        self.assertEqual(
+            self.finding.impact, "<p>Here is some evidence:</p><p>{{.New Name}}</p><p>{{.ref New Name}}</p>"
+        )
+
+    def test_graphql_evidence_delete_event(self):
+        self.assertTrue(os.path.exists(self.deleted_evidence.document.path))
+        response = self.client.post(
+            self.uri,
+            content_type="application/json",
+            data=self.delete_data,
+            **{
+                "HTTP_HASURA_ACTION_SECRET": f"{ACTION_SECRET}",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(os.path.exists(self.deleted_evidence.document.path))
+        self.finding.refresh_from_db()
+        self.assertEqual(self.finding.mitigation, "<p>Here is some evidence:</p><p></p>")
+
+
 # Tests related to CBVs for :model:`api:APIKey`
 
 
@@ -1352,7 +2067,7 @@ class ApiKeyRevokeTests(TestCase):
         self.assertEqual(response.status_code, 302)
 
     def test_revoking_another_users_token(self):
-        response = self.client.post(self.other_uri)
+        response = self.client_auth.post(self.other_uri)
         self.assertEqual(response.status_code, 302)
 
 

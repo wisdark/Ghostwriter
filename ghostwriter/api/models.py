@@ -72,9 +72,7 @@ class APIKeyManager(BaseAPIKeyManager):
 
 
 class AbstractAPIKey(models.Model):
-    """
-    Stores a specialized JSON Web Token associated with an individual :model:`users.User`.
-    """
+    """Stores a specialized JSON Web Token associated with an individual :model:`users.User`."""
 
     objects = APIKeyManager()
 
@@ -82,7 +80,7 @@ class AbstractAPIKey(models.Model):
         max_length=255,
         blank=False,
         default=None,
-        help_text=("A name to identify this API key"),
+        help_text="A name to identify this API key",
     )
     token = models.TextField(editable=False)
     created = models.DateTimeField(auto_now_add=True, db_index=True)
@@ -95,7 +93,7 @@ class AbstractAPIKey(models.Model):
     revoked = models.BooleanField(
         blank=True,
         default=False,
-        help_text=("If the API key is revoked, clients cannot use it anymore (this is irreversible)"),
+        help_text="If the API key is revoked, clients cannot use it anymore (this is irreversible)",
     )
     # Foreign Keys
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -145,6 +143,4 @@ class AbstractAPIKey(models.Model):
 
 
 class APIKey(AbstractAPIKey):
-    """
-    Stores a specialized JSON Web Token associated with an individual :model:`users.User`.
-    """
+    """Stores a specialized JSON Web Token associated with an individual :model:`users.User`."""

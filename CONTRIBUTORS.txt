@@ -1,5 +1,4 @@
-This file contains a list of people who have made large contributions to the public
-version of Ghostwriter.
+This file contains a list of people who have made large contributions to the public version of Ghostwriter.
 
 Original Ghostwriter design and implementation:
   Christopher Maddalena (@cmaddalena)
@@ -9,4 +8,34 @@ Docker container and deployment design:
     Derek Rush (@covertgeek)
 
 Original operation logging API design:
-    Daniel heinsen (@hotnops)
+    Daniel Heinsen (@hotnops)
+
+Various enhancements and bug fixes:
+    Lorenzo Bernardi (@fastlorenzo)
+
+Support for alternate default paragraph styles:
+    @federicodotta
+
+Support for custom fields, refactored report writer, and more:
+    Alex Parrill (@ColonelThirtyTwo)
+
+Support for HTML tables:
+    @domwhewell
+
+Valuable feedback and testing:
+    Tilman Bender (@er4z0r)
+
+Valuable feedback and testing:
+    Ellen Shaaltiel (@KomodoGal)
+
+Initial support for the CVSS v3 calculator:
+    @therealtoastycat
+
+Contributed adjusted to Docker Compose:
+    @mattreduce
+
+Support for pasting evidence from the clipboard:
+    @brandonscholet
+
+Reported issues and feedback:
+    @dbuentello

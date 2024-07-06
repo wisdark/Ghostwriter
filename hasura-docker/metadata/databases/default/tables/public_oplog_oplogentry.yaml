@@ -7,6 +7,10 @@ configuration:
       custom_name: destIp
     end_date:
       custom_name: endDate
+    entry_identifier:
+      custom_name: entryIdentifier
+    extra_fields:
+      custom_name: extraFields
     operator_name:
       custom_name: operatorName
     oplog_id_id:
@@ -20,6 +24,8 @@ configuration:
   custom_column_names:
     dest_ip: destIp
     end_date: endDate
+    entry_identifier: entryIdentifier
+    extra_fields: extraFields
     operator_name: operatorName
     oplog_id_id: oplog
     source_ip: sourceIp
@@ -41,35 +47,9 @@ insert_permissions:
         - description
         - dest_ip
         - end_date
+        - entry_identifier
+        - extra_fields
         - operator_name
-        - oplog_id_id
-        - output
-        - source_ip
-        - start_date
-        - tool
-        - user_context
-  - role: restricted
-    permission:
-      check:
-        log:
-          project:
-            _or:
-              - invites:
-                  user_id:
-                    _eq: X-Hasura-User-Id
-              - assignments:
-                  operator_id:
-                    _eq: X-Hasura-User-Id
-              - client:
-                  invites:
-                    user_id:
-                      _eq: X-Hasura-User-Id
-      columns:
-        - command
-        - comments
-        - description
-        - dest_ip
-        - end_date
         - oplog_id_id
         - output
         - source_ip
@@ -98,48 +78,35 @@ insert_permissions:
         - description
         - dest_ip
         - end_date
+        - entry_identifier
+        - extra_fields
+        - operator_name
         - oplog_id_id
         - output
         - source_ip
         - start_date
         - tool
         - user_context
-        - operator_name
 select_permissions:
   - role: manager
     permission:
       columns:
-        - id
-        - oplog_id_id
-        - operator_name
         - command
         - comments
         - description
         - dest_ip
+        - end_date
+        - entry_identifier
+        - extra_fields
+        - id
+        - operator_name
+        - oplog_id_id
         - output
         - source_ip
+        - start_date
         - tool
         - user_context
-        - end_date
-        - start_date
       filter: {}
-  - role: restricted
-    permission:
-      columns: '*'
-      filter:
-        log:
-          project:
-            _or:
-              - invites:
-                  user_id:
-                    _eq: X-Hasura-User-Id
-              - assignments:
-                  operator_id:
-                    _eq: X-Hasura-User-Id
-              - client:
-                  invites:
-                    user_id:
-                      _eq: X-Hasura-User-Id
   - role: user
     permission:
       columns: '*'
@@ -166,6 +133,8 @@ update_permissions:
         - description
         - dest_ip
         - end_date
+        - entry_identifier
+        - extra_fields
         - operator_name
         - oplog_id_id
         - output
@@ -175,48 +144,6 @@ update_permissions:
         - user_context
       filter: {}
       check: {}
-  - role: restricted
-    permission:
-      columns:
-        - command
-        - comments
-        - description
-        - dest_ip
-        - end_date
-        - oplog_id_id
-        - output
-        - source_ip
-        - start_date
-        - tool
-        - user_context
-      filter:
-        log:
-          project:
-            _or:
-              - invites:
-                  user_id:
-                    _eq: X-Hasura-User-Id
-              - assignments:
-                  operator_id:
-                    _eq: X-Hasura-User-Id
-              - client:
-                  invites:
-                    user_id:
-                      _eq: X-Hasura-User-Id
-      check:
-        log:
-          project:
-            _or:
-              - invites:
-                  user_id:
-                    _eq: X-Hasura-User-Id
-              - assignments:
-                  operator_id:
-                    _eq: X-Hasura-User-Id
-              - client:
-                  invites:
-                    user_id:
-                      _eq: X-Hasura-User-Id
   - role: user
     permission:
       columns:
@@ -225,13 +152,15 @@ update_permissions:
         - description
         - dest_ip
         - end_date
+        - entry_identifier
+        - extra_fields
+        - operator_name
         - oplog_id_id
         - output
         - source_ip
         - start_date
         - tool
         - user_context
-        - operator_name
       filter:
         log:
           project:
@@ -264,22 +193,6 @@ delete_permissions:
   - role: manager
     permission:
       filter: {}
-  - role: restricted
-    permission:
-      filter:
-        log:
-          project:
-            _or:
-              - invites:
-                  user_id:
-                    _eq: X-Hasura-User-Id
-              - assignments:
-                  operator_id:
-                    _eq: X-Hasura-User-Id
-              - client:
-                  invites:
-                    user_id:
-                      _eq: X-Hasura-User-Id
   - role: user
     permission:
       filter:

@@ -1,8 +1,11 @@
 """This contains all the database models used by the Users application."""
 
+# Standard Libraries
+from binascii import hexlify
+
 # Django Imports
 from django.contrib.auth.models import AbstractUser
-from django.db.models import CharField
+from django.db.models import BooleanField, CharField
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 
@@ -14,14 +17,13 @@ active_roles = (
     ("user", "user"),
     ("manager", "manager"),
     ("admin", "admin"),
-    ("restricted", "restricted"),
 )
 
 
 class User(AbstractUser):
-    """
-    Stores an individual user's name.
-    """
+    """Stores an individual user's information."""
+
+    REQUIRED_FIELDS = ["role"]
 
     # First Name and Last Name do not cover name patterns around the globe
     name = CharField(_("Name of User"), blank=True, max_length=255)
@@ -49,14 +51,47 @@ class User(AbstractUser):
         default="user",
         help_text="Role used for role-based access controls. Most users should be `user`. Users who need broader access to projects for oversight should be `manager`. See documentation for more details.",
     )
+    enable_finding_create = BooleanField(
+        default=False,
+        help_text="Allow the user to create new findings in the library (only applies to account with the User role)",
+        verbose_name="Allow Finding Creation",
+    )
+    enable_finding_edit = BooleanField(
+        default=False,
+        help_text="Allow the user to edit findings in the library (only applies to accounts with the User role)",
+        verbose_name="Allow Finding Editing",
+    )
+    enable_finding_delete = BooleanField(
+        default=False,
+        help_text="Allow the user to delete findings in the library (only applies to accounts with the User role)",
+        verbose_name="Allow Finding Deleting",
+    )
+    enable_observation_create = BooleanField(
+        default=False,
+        help_text="Allow the user to create new observations in the library (only applies to account with the User role)",
+        verbose_name="Allow Observation Creation",
+    )
+    enable_observation_edit = BooleanField(
+        default=False,
+        help_text="Allow the user to edit observations in the library (only applies to accounts with the User role)",
+        verbose_name="Allow Observation Editing",
+    )
+    enable_observation_delete = BooleanField(
+        default=False,
+        help_text="Allow the user to delete observations in the library (only applies to accounts with the User role)",
+        verbose_name="Allow Observation Deleting",
+    )
+    require_2fa = BooleanField(
+        default=False,
+        help_text="Require the user to set up two-factor authentication",
+        verbose_name="Require 2FA",
+    )
 
     def get_absolute_url(self):
         return reverse("users:detail", kwargs={"username": self.username})
 
     def get_display_name(self):
-        """
-        Return a display name appropriate for dropdown menus.
-        """
+        """Return a display name appropriate for dropdown menus."""
         if self.name:
             display_name = "{full_name} ({username})".format(full_name=self.name, username=self.username)
         else:
@@ -74,3 +109,24 @@ class User(AbstractUser):
         display the user's name in different places in the admin site.
         """
         return self.name
+
+    def get_clean_username(self):
+        """Return a hex-encoded username to ensure the username is safe for WebSockets channel names."""
+        return hexlify(self.username.encode()).decode()
+
+    def save(self, *args, **kwargs):
+        # Align Django's permissions flags with the chosen role
+        if self.role == "user":
+            self.is_staff = False
+            self.is_superuser = False
+
+        # Set the `is_staff` and `is_superuser` flags based on the role
+        if self.role in ["admin"]:
+            self.is_staff = True
+            self.is_superuser = True
+
+        # Set the role to admin if the user is a superuser or staff
+        if self.is_superuser or self.is_staff:
+            self.role = "admin"
+
+        super().save(*args, **kwargs)

@@ -10,42 +10,49 @@ from django.utils.timezone import make_aware
 
 # 3rd Party Libraries
 from crispy_forms.helper import FormHelper
-from crispy_forms.layout import HTML, ButtonHolder, Column, Layout, Row, Submit
+from crispy_forms.layout import HTML, ButtonHolder, Column, Field, Layout, Row, Submit
 
 # Ghostwriter Libraries
+from ghostwriter.api.utils import get_project_list
 from ghostwriter.oplog.models import Oplog, OplogEntry
 from ghostwriter.rolodex.models import Project
+from ghostwriter.commandcenter.forms import ExtraFieldsField
 
 
 class OplogForm(forms.ModelForm):
-    """
-    Save an individual :model:`oplog.Oplog`.
-    """
+    """Save an individual :model:`oplog.Oplog`."""
 
     class Meta:
         model = Oplog
         fields = "__all__"
 
-    def __init__(self, project=None, *args, **kwargs):
+    def __init__(self, user=None, project=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # If this is an update, mark project as read-only
+        # If this is an update, mark the project field as read-only
         instance = getattr(self, "instance", None)
         if instance and instance.pk:
             self.fields["project"].disabled = True
+
+        # Limit the list to the pre-selected project and disable the field
+        if project:
+            self.fields["project"].queryset = Project.objects.filter(pk=project.pk)
+            self.fields["project"].disabled = True
+
+        # Limit the list to active projects if this is a new log made from the sidebar
+        if not project:
+            projects = get_project_list(user)
+            active_projects = projects.filter(complete=False).order_by("-start_date")
+            if active_projects:
+                self.fields["project"].empty_label = "-- Select an Active Project --"
+            else:
+                self.fields["project"].empty_label = "-- No Active Projects --"
+            self.fields["project"].queryset = active_projects
+
+        for field in self.fields:
+            self.fields[field].widget.attrs["autocomplete"] = "off"
         self.fields["name"].widget.attrs["placeholder"] = "Descriptive Name for Identification"
         self.fields["name"].label = "Name for the Log"
         self.fields["name"].help_text = "Enter a name for this log that will help you identify it"
-
-        # Limit the list to just projects not marked as complete
-        self.project_instance = project
-        active_projects = Project.objects.filter(complete=False).order_by("-start_date")
-        if active_projects:
-            self.fields["project"].empty_label = "-- Select an Active Project --"
-        else:
-            self.fields["project"].empty_label = "-- No Active Projects --"
-        self.fields["project"].queryset = active_projects
-        for field in self.fields:
-            self.fields[field].widget.attrs["autocomplete"] = "off"
 
         # Design form layout with Crispy's ``FormHelper``
         self.helper = FormHelper()
@@ -66,9 +73,7 @@ class OplogForm(forms.ModelForm):
 
 
 class OplogEntryForm(forms.ModelForm):
-    """
-    Save an individual :model:`oplog.OplogEntry`.
-    """
+    """Save an individual :model:`oplog.OplogEntry`."""
 
     start_date = forms.DateTimeField(
         input_formats=["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M"],
@@ -77,6 +82,7 @@ class OplogEntryForm(forms.ModelForm):
         input_formats=["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M"],
         required=False,
     )
+    extra_fields = ExtraFieldsField(OplogEntry._meta.label)
 
     class Meta:
         model = OplogEntry
@@ -106,6 +112,7 @@ class OplogEntryForm(forms.ModelForm):
         self.fields["end_date"].initial = make_aware(datetime.utcnow())
         self.fields["end_date"].label = "End Date & Time"
         self.fields["end_date"].help_text = "Date and time the action completed or halted"
+        self.fields["extra_fields"].label = ""
 
         self.fields["command"].widget.attrs["rows"] = 2
         self.fields["output"].widget.attrs["rows"] = 2
@@ -117,18 +124,28 @@ class OplogEntryForm(forms.ModelForm):
         self.helper.form_id = "oplog-entry-form"
 
         # Set form action based on whether this is a new or existing entry
-        # For now, this form is only used for updates so there should always be an instance available
+        # This form is only used for updates via AJAX so there should always be an instance available, but we handle
+        # other possibilities to avoid a server error if someone tries browsing to the URL directly
+        post_url = None
         if self.instance.pk:
             post_url = reverse("oplog:oplog_entry_update", kwargs={"pk": self.instance.pk})
         else:
-            post_url = reverse("oplog:oplog_entry_create", kwargs={"pk": self.oplog.pk})
-        self.helper.form_action = post_url
+            if self.oplog:
+                post_url = reverse("oplog:oplog_entry_create", kwargs={"pk": self.oplog.pk})
+        if post_url:
+            self.helper.form_action = post_url
+
+        has_extra_fields = bool(self.fields["extra_fields"].specs)
 
         self.helper.layout = Layout(
             Row(
-                Column("start_date", css_class="form-group col-4 mb-0"),
-                Column("end_date", css_class="form-group col-4 mb-0"),
-                Column("operator_name", css_class="form-group col-4 mb-0"),
+                Column(Field("start_date", step=1), css_class="form-group col-6 mb-0"),
+                Column(Field("end_date", step=1), css_class="form-group col-6 mb-0"),
+                css_class="form-row",
+            ),
+            Row(
+                Column("entry_identifier", css_class="form-group col-6 mb-0"),
+                Column("operator_name", css_class="form-group col-6 mb-0"),
                 css_class="form-row",
             ),
             Row(
@@ -152,6 +169,13 @@ class OplogEntryForm(forms.ModelForm):
                 css_class="form-row",
             ),
             "tags",
+            HTML(
+                """
+                <h4 class="icon custom-field-icon">Extra Fields</h4>
+                <hr />
+                """
+            ) if has_extra_fields else None,
+            "extra_fields" if has_extra_fields else None,
             ButtonHolder(
                 Submit("submit_btn", "Submit", css_class="btn btn-primary col-md-4"),
                 HTML(

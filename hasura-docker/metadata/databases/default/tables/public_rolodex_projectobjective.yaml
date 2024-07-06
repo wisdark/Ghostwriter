@@ -41,29 +41,7 @@ insert_permissions:
     permission:
       check: {}
       columns:
-        - deadline
-        - description
-        - objective
-        - position
-        - priority_id
-        - project_id
-        - status_id
-  - role: restricted
-    permission:
-      check:
-        project:
-          _or:
-            - assignments:
-                operator_id:
-                  _eq: X-Hasura-User-Id
-            - invites:
-                user_id:
-                  _eq: X-Hasura-User-Id
-            - client:
-                invites:
-                  user_id:
-                    _eq: X-Hasura-User-Id
-      columns:
+        - complete
         - deadline
         - description
         - objective
@@ -87,6 +65,7 @@ insert_permissions:
                   user_id:
                     _eq: X-Hasura-User-Id
       columns:
+        - complete
         - deadline
         - description
         - objective
@@ -109,22 +88,6 @@ select_permissions:
         - position
         - description
       filter: {}
-  - role: restricted
-    permission:
-      columns: '*'
-      filter:
-        project:
-          _or:
-            - assignments:
-                operator_id:
-                  _eq: X-Hasura-User-Id
-            - invites:
-                user_id:
-                  _eq: X-Hasura-User-Id
-            - client:
-                invites:
-                  user_id:
-                    _eq: X-Hasura-User-Id
   - role: user
     permission:
       columns: '*'
@@ -155,43 +118,6 @@ update_permissions:
         - status_id
       filter: {}
       check: {}
-  - role: restricted
-    permission:
-      columns:
-        - complete
-        - deadline
-        - description
-        - objective
-        - position
-        - priority_id
-        - project_id
-        - status_id
-      filter:
-        project:
-          _or:
-            - assignments:
-                operator_id:
-                  _eq: X-Hasura-User-Id
-            - invites:
-                user_id:
-                  _eq: X-Hasura-User-Id
-            - client:
-                invites:
-                  user_id:
-                    _eq: X-Hasura-User-Id
-      check:
-        project:
-          _or:
-            - assignments:
-                operator_id:
-                  _eq: X-Hasura-User-Id
-            - invites:
-                user_id:
-                  _eq: X-Hasura-User-Id
-            - client:
-                invites:
-                  user_id:
-                    _eq: X-Hasura-User-Id
   - role: user
     permission:
       columns:
@@ -233,21 +159,6 @@ delete_permissions:
   - role: manager
     permission:
       filter: {}
-  - role: restricted
-    permission:
-      filter:
-        project:
-          _or:
-            - assignments:
-                operator_id:
-                  _eq: X-Hasura-User-Id
-            - invites:
-                user_id:
-                  _eq: X-Hasura-User-Id
-            - client:
-                invites:
-                  user_id:
-                    _eq: X-Hasura-User-Id
   - role: user
     permission:
       filter:
@@ -263,3 +174,21 @@ delete_permissions:
                 invites:
                   user_id:
                     _eq: X-Hasura-User-Id
+event_triggers:
+  - name: UpdateProjectObjective
+    definition:
+      enable_manual: false
+      insert:
+        columns: '*'
+      update:
+        columns:
+          - deadline
+          - complete
+    retry_conf:
+      interval_sec: 10
+      num_retries: 0
+      timeout_sec: 60
+    webhook: '{{ACTIONS_URL_BASE}}/event/projetobjective/update'
+    headers:
+      - name: Hasura-Action-Secret
+        value_from_env: HASURA_ACTION_SECRET

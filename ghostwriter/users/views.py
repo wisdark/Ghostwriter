@@ -1,17 +1,24 @@
 """This contains all the views used by the Users application."""
 
+
+# Standard Libraries
+import os
+
 # Django Imports
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
-from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+from django.http import FileResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
-from django.views.generic import DetailView, RedirectView, UpdateView
+from django.views.generic import DetailView, RedirectView, UpdateView, View
+from django.views.generic.detail import SingleObjectMixin
 
 # 3rd Party Libraries
 from allauth.account.views import PasswordChangeView, PasswordResetFromKeyView
 
 # Ghostwriter Libraries
+from ghostwriter.api.utils import RoleBasedAccessControlMixin
 from ghostwriter.home.forms import UserProfileForm
 from ghostwriter.home.models import UserProfile
 from ghostwriter.users.forms import UserChangeForm
@@ -19,7 +26,7 @@ from ghostwriter.users.forms import UserChangeForm
 User = get_user_model()
 
 
-class UserDetailView(LoginRequiredMixin, DetailView):
+class UserDetailView(RoleBasedAccessControlMixin, DetailView):
     """
     Display an individual :model:`users.User`.
 
@@ -47,7 +54,7 @@ class UserDetailView(LoginRequiredMixin, DetailView):
 user_detail_view = UserDetailView.as_view()
 
 
-class UserUpdateView(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
+class UserUpdateView(RoleBasedAccessControlMixin, UpdateView):
     """
     Update details for an individual :model:`users.User`.
 
@@ -68,14 +75,13 @@ class UserUpdateView(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
     template_name = "users/profile_form.html"
 
     def test_func(self):
-        self.object = self.get_object()
-        return self.request.user.id == self.object.id
+        user = self.get_object()
+        return self.request.user.id == user.id
 
     def handle_no_permission(self):
         if self.request.user.username:
-            messages.warning(self.request, "You do not have permission to access that")
-            return redirect("users:redirect")
-        return redirect("home:dashboard")
+            messages.warning(self.request, "You do not have permission to access that.")
+        return redirect("users:redirect")
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -88,7 +94,7 @@ class UserUpdateView(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
     def get_success_url(self):
         messages.success(
             self.request,
-            "Successfully updated your profile",
+            "Successfully updated your profile!",
             extra_tags="alert-success",
         )
         return reverse("users:user_detail", kwargs={"username": self.request.user.username})
@@ -97,7 +103,7 @@ class UserUpdateView(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
 user_update_view = UserUpdateView.as_view()
 
 
-class UserProfileUpdateView(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
+class UserProfileUpdateView(RoleBasedAccessControlMixin, UpdateView):
     """
     Update a :model:`home.UserProfile` for an individual :model:`users.User`.
 
@@ -118,14 +124,13 @@ class UserProfileUpdateView(LoginRequiredMixin, UserPassesTestMixin, UpdateView)
     template_name = "users/profile_form.html"
 
     def test_func(self):
-        self.object = self.get_object()
-        return self.request.user.id == self.object.user.id
+        profile = self.get_object()
+        return self.request.user.id == profile.user.id
 
     def handle_no_permission(self):
         if self.request.user.username:
-            messages.warning(self.request, "You do not have permission to access that")
-            return redirect("users:redirect")
-        return redirect("home:dashboard")
+            messages.warning(self.request, "You do not have permission to access that.")
+        return redirect("users:redirect")
 
     def get_object(self, queryset=None):
         id_ = get_object_or_404(User, username=self.kwargs.get("username")).id
@@ -139,7 +144,7 @@ class UserProfileUpdateView(LoginRequiredMixin, UserPassesTestMixin, UpdateView)
     def get_success_url(self):
         messages.success(
             self.request,
-            "Successfully updated your profile",
+            "Successfully updated your profile!",
             extra_tags="alert-success",
         )
         return reverse("users:user_detail", kwargs={"username": self.request.user.username})
@@ -148,7 +153,7 @@ class UserProfileUpdateView(LoginRequiredMixin, UserPassesTestMixin, UpdateView)
 userprofile_update_view = UserProfileUpdateView.as_view()
 
 
-class UserRedirectView(LoginRequiredMixin, RedirectView):
+class UserRedirectView(RoleBasedAccessControlMixin, RedirectView):
     """
     Redirect to the details view for an individual :model:`users.User`.
 
@@ -171,7 +176,7 @@ class UserRedirectView(LoginRequiredMixin, RedirectView):
 user_redirect_view = UserRedirectView.as_view()
 
 
-class GhostwriterPasswordChangeView(LoginRequiredMixin, PasswordChangeView):
+class GhostwriterPasswordChangeView(RoleBasedAccessControlMixin, PasswordChangeView):
     """
     Update an existing password for individual :model:`users.User`.
 
@@ -183,7 +188,7 @@ class GhostwriterPasswordChangeView(LoginRequiredMixin, PasswordChangeView):
     def get_success_url(self):
         messages.success(
             self.request,
-            "Your password was successfully updated!",
+            "Successfully updated your password!",
             extra_tags="alert-success",
         )
         return reverse_lazy("users:user_detail", kwargs={"username": self.request.user.username})
@@ -206,3 +211,36 @@ class GhostwriterPasswordSetFromKeyView(PasswordResetFromKeyView):  # pragma: no
 
 
 account_reset_password_from_key = GhostwriterPasswordSetFromKeyView.as_view()
+
+
+class AvatarDownload(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """
+    Return the target :model:`users.User` entries avatar file from
+    :model:`home.UserProfile` for download.
+    """
+
+    model = UserProfile
+    slug_field = "username"
+    slug_url_kwarg = "username"
+
+    def get_object(self, queryset=None):
+        return get_object_or_404(UserProfile, user__username=self.kwargs.get("slug"))
+
+    def get(self, *args, **kwargs):
+        obj = self.get_object()
+        try:
+            file_path = os.path.join(settings.MEDIA_ROOT, obj.avatar.path)
+        except ValueError:
+            file_path = os.path.join(settings.STATICFILES_DIRS[0], "images/default_avatar.png")
+
+        if not os.path.exists(file_path):
+            file_path = os.path.join(settings.STATICFILES_DIRS[0], "images/default_avatar.png")
+
+        return FileResponse(
+            open(file_path, "rb"),
+            as_attachment=True,
+            filename=os.path.basename(file_path),
+        )
+
+
+avatar_download = AvatarDownload.as_view()

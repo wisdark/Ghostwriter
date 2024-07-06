@@ -136,7 +136,7 @@ class Domain(models.Model):
     registrar = models.CharField(
         "Registrar",
         max_length=255,
-        null=True,
+        default="",
         blank=True,
         help_text="Enter the name of the registrar where this domain is registered",
     )
@@ -157,7 +157,7 @@ class Domain(models.Model):
     vt_permalink = models.CharField(
         "VirusTotal Permalink",
         max_length=255,
-        null=True,
+        default="",
         blank=True,
         help_text="VirusTotal's permalink for scan results of this domain",
     )
@@ -169,13 +169,13 @@ class Domain(models.Model):
     )
     note = models.TextField(
         "Notes",
-        null=True,
+        default="",
         blank=True,
         help_text="Use this area to provide notes and thoughts behind its purchase and intended use",
     )
     burned_explanation = models.TextField(
         "Health Explanation",
-        null=True,
+        default="",
         blank=True,
         help_text="Provide details such as how the domain was detected, why it was blacklisted for spam, if it was flagged with a bad category, etc.",
     )
@@ -195,6 +195,7 @@ class Domain(models.Model):
         help_text="Reset DNS records (if possible) after this domain is used",
     )
     tags = TaggableManager(blank=True)
+    extra_fields = models.JSONField(default=dict)
     # Foreign Keys
     whois_status = models.ForeignKey(
         "WhoisStatus",
@@ -233,7 +234,7 @@ class Domain(models.Model):
         verbose_name_plural = "Domains"
 
     def natural_key(self):  # pragma: no cover
-        return (self.name,)
+        return self.name
 
     def get_absolute_url(self):
         return reverse("shepherd:domain_detail", args=[str(self.id)])
@@ -273,6 +274,16 @@ class Domain(models.Model):
                 expiring_soon = True
         return expiring_soon
 
+    def may_expire_soon(self):
+        """
+        Check if the domain's expiration DateField value is in the near future, ignoring `auto_renew` status.
+        """
+        expiring_soon = False
+        delta = date.today() + datetime.timedelta(days=30)
+        if self.expiration <= delta:
+            expiring_soon = True
+        return expiring_soon
+
     def __str__(self):
         return f"{self.name} ({self.health_status})"
 
@@ -288,7 +299,7 @@ class History(models.Model):
     end_date = models.DateField("End Date", help_text="Select the end date of the project")
     note = models.TextField(
         "Notes",
-        null=True,
+        default="",
         blank=True,
         help_text="Use this area to provide project-related notes, such as how the domain will be used/how it worked out",
     )
@@ -413,18 +424,19 @@ class StaticServer(models.Model):
     )
     note = models.TextField(
         "Notes",
-        null=True,
+        default="",
         blank=True,
         help_text="Use this area to provide server-related notes, such as its designated use or how it can be used",
     )
     name = models.CharField(
         "Name",
         max_length=255,
-        null=True,
+        default="",
         blank=True,
         help_text="Enter the server's name (typically hostname)",
     )
     tags = TaggableManager(blank=True)
+    extra_fields = models.JSONField(default=dict)
     # Foreign Keys
     server_status = models.ForeignKey(
         ServerStatus,
@@ -483,7 +495,7 @@ class ServerHistory(models.Model):
     end_date = models.DateField("End Date", help_text="Select the end date of the project")
     note = models.TextField(
         "Notes",
-        null=True,
+        default="",
         blank=True,
         help_text="Use this area to provide project-related notes, such as how the server/IP will be used",
     )
@@ -592,13 +604,13 @@ class TransientServer(models.Model):
     name = models.CharField(
         "Name",
         max_length=255,
-        null=True,
+        default="",
         blank=True,
         help_text="Enter the server's name (typically hostname)",
     )
     note = models.TextField(
         "Notes",
-        null=True,
+        default="",
         blank=True,
         help_text="Use this area to provide project-related notes, such as how the server will be used",
     )
@@ -657,7 +669,7 @@ class DomainServerConnection(models.Model):
     endpoint = models.CharField(
         "CDN Endpoint",
         max_length=255,
-        null=True,
+        default="",
         blank=True,
         help_text="The CDN endpoint used with this link, if any",
     )
@@ -665,7 +677,6 @@ class DomainServerConnection(models.Model):
         "Subdomain",
         max_length=255,
         blank=True,
-        null=True,
         default="*",
         help_text="The subdomain used for this domain record",
     )
@@ -716,7 +727,7 @@ class DomainNote(models.Model):
     timestamp = models.DateField("Timestamp", auto_now_add=True, help_text="Creation timestamp")
     note = models.TextField(
         "Notes",
-        null=True,
+        default="",
         blank=True,
         help_text="Use this area to add a note to this domain",
     )
@@ -741,7 +752,7 @@ class ServerNote(models.Model):
     timestamp = models.DateField("Timestamp", auto_now_add=True, help_text="Creation timestamp")
     note = models.TextField(
         "Notes",
-        null=True,
+        default="",
         blank=True,
         help_text="Use this area to add a note to this server",
     )

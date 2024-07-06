@@ -1,6 +1,6 @@
 {% extends "base_generic.html" %}
 
-{% load bleach_tags %}
+{% load bleach_tags custom_tags extra_fields %}
 
 {% load i18n %}
 {% get_current_language as LANGUAGE_CODE %}
@@ -19,17 +19,19 @@
 
 {% block content %}
     <!-- Current language: {{ LANGUAGE_CODE }} -->
-    <div class="dropdown">
-        <div class="dropdown-menu-btn" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" onclick="hamburger(this)">
-            <div class="bar1"></div>
-            <div class="bar2"></div>
-            <div class="bar3"></div>
-        </div>
-        <div class="dropdown-menu dropdown-menu-right" aria-labelledby="client-dropdown-btn">
-            <a class="dropdown-item icon edit-icon" href="{% url 'rolodex:client_update' client.id %}"> Edit</a>
-            <a class="dropdown-item icon trash-icon" href="{% url 'rolodex:client_delete' client.id %}"> Delete</a>
-        </div>
-    </div>
+    {% if request.user|is_privileged %}
+      <div class="dropdown">
+          <div class="dropdown-menu-btn" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" onclick="hamburger(this)">
+              <div class="bar1"></div>
+              <div class="bar2"></div>
+              <div class="bar3"></div>
+          </div>
+          <div class="dropdown-menu dropdown-menu-right" aria-labelledby="client-dropdown-btn">
+              <a class="dropdown-item icon edit-icon" href="{% url 'rolodex:client_update' client.id %}"> Edit</a>
+              <a class="dropdown-item icon trash-icon" href="{% url 'rolodex:client_delete' client.id %}"> Delete</a>
+          </div>
+      </div>
+    {% endif %}
 
     <div class="container">
         <h2>{{ client.name }}</h2>
@@ -96,7 +98,7 @@
                     {% if client.address %}
                         {{ client.address|bleach }}
                     {% else %}
-                        <p>No address provided for this client.</p>
+                        <div class="alert alert-warning offset-md-2 col-md-8 mt-1" role="alert">No address provided for this client.</div>
                     {% endif %}
                 </div>
             </div>
@@ -122,8 +124,8 @@
                         {% for poc in client.clientcontact_set.all %}
                             <tr>
                                 <td class="align-middle" id="delete-target-content-contact-{{ poc.id }}">{{ poc.name }}</td>
-                                <td class="align-middle">{{ poc.job_title }}</td>
-                                <td class="align-middle">{{ poc.email }}</td>
+                                <td class="align-middle">{% if poc.job_title %}{{ poc.job_title }}{% else %}--{% endif %}</td>
+                                <td class="align-middle">{% if poc.email %}{{ poc.email }}{% else %}--{% endif %}</td>
                                 <td class="align-middle">
                                     {% if poc.phone %}
                                         {{ poc.phone }}
@@ -145,7 +147,7 @@
                         {% endfor %}
                     </table>
                 {% else %}
-                    <p class="mt-3">There is nothing to see here yet.</p>
+                    <div class="alert alert-warning offset-md-2 col-md-8 mt-1" role="alert">There is nothing to see here yet.</div>
                 {% endif %}
             </div>
 
@@ -185,7 +187,7 @@
                         {% endfor %}
                     </table>
                 {% else %}
-                    <p class="mt-3">This client has no project history.</p>
+                    <div class="alert alert-warning offset-md-2 col-md-8 mt-1" role="alert">This client has no project history.</div>
                 {% endif %}
             </div>
 
@@ -249,9 +251,19 @@
                         </table>
                     {% endif %}
                 {% else %}
-                    <p>No infrastructure history for this client yet.</p>
+                  <div class="alert alert-warning offset-md-2 col-md-8 mt-1" role="alert">No infrastructure history for this client yet.</div>
                 {% endif %}
             </div>
+
+            {% comment %} Extra Fields Tab {% endcomment %}
+            {% if client_extra_fields_spec %}
+                <div id="extra_fields" class="tab-pane">
+                  <h4>Extra Fields</h4>
+                  <hr/>
+
+                  {% include "user_extra_fields/field_preview_display.html" with object=client object_extra_fields_spec=client_extra_fields_spec %}
+                </div>
+            {% endif %}
 
             <!-- Notes Tab -->
             <div id="notes" class="tab-pane">
@@ -275,7 +287,7 @@
                             </div>
                         </div>
 
-                        {% if request.user == note.operator or request.user.is_staff %}
+                        {% if request.user == note.operator or request.user|is_privileged %}
                             <div class="pb-3">
                                 <a class="note-link" href="{% url 'rolodex:client_note_edit' note.id %}">Edit</a> |
                                 <a id="note-delete-button-{{ note.id }}" class="js-confirm-delete note-link" data-toggle="modal" data-target="#confirm-delete-modal" href="javascript:void(0);" delete-target-csrftoken="{{ csrf_token }}" delete-target-url="{% url 'rolodex:ajax_delete_client_note' note.id%}" delete-target-id="{{ note.id }}" delete-target-type="note">Delete</a>
@@ -283,7 +295,7 @@
                         {% endif %}
                     {% endfor %}
                 {% else %}
-                    <p>No notes for this client.</p>
+                    <div class="alert alert-warning offset-md-2 col-md-8 mt-1" role="alert">No notes for this client.</div>
                 {% endif %}
             </div>
         </div>
@@ -354,4 +366,11 @@
 
     {% comment %} Include the reusable delete confirmation modal and related scripts {% endcomment %}
     {% include "confirm_delete_modal.html" %}
+
+    {% comment %} Insert modals for RichText previews on extra fields {% endcomment %}
+    {% if client_extra_fields_spec %}
+      {% for field_spec in client_extra_fields_spec %}
+        {% include "user_extra_fields/extra_field_modal.html" with extra_fields=client.extra_fields field_spec=field_spec %}
+      {% endfor %}
+    {% endif %}
 {% endblock %}

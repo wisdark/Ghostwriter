@@ -30,27 +30,32 @@ class DomainFilter(django_filters.FilterSet):
 
     **Fields**
 
-    ``name``
-        Case insensitive search of the name field contents
-    ``categorization``
-        Case insensitive search of the categorization field
+    ``domain``
+        Case insensitive search of the `name` and `categorization` fields contents
     ``health_status``
         Checkbox choice filter using :model:`shepherd.HealthStatus`
     ``domain_status``
         Checkbox choice filter using :model:`shepherd.DomainStatus`
     ``exclude_expired``
         Checkbox to exclude expired domains from search results
+    ``tags``
+        Search of the `tags` field
     """
 
-    name = django_filters.CharFilter(
-        lookup_expr="icontains",
-        label="Domain Name Contains",
-        widget=TextInput(attrs={"placeholder": "Domain Name", "autocomplete": "off"}),
+    domain = django_filters.CharFilter(
+        method="search_name_and_category",
+        label="Domain Name or Category Contains",
+        widget=TextInput(attrs={"placeholder": "Partial Domain Name or Category", "autocomplete": "off"}),
     )
-    categorization = django_filters.CharFilter(
-        lookup_expr="icontains",
-        label="Categories Contain",
-        widget=TextInput(attrs={"placeholder": "Category", "autocomplete": "off"}),
+    tags = django_filters.CharFilter(
+        method="search_tags",
+        label="Domain Tags Contain",
+        widget=TextInput(
+            attrs={
+                "placeholder": "Domain Tag",
+                "autocomplete": "off",
+            }
+        ),
     )
     health_status = django_filters.ModelMultipleChoiceFilter(
         queryset=HealthStatus.objects.all(),
@@ -71,16 +76,7 @@ class DomainFilter(django_filters.FilterSet):
 
     class Meta:
         model = Domain
-        fields = ["name", "categorization", "health_status", "domain_status"]
-
-    def filter_expired(self, queryset, name, value):
-        """
-        Choose to include or exclude expired domains in search results.
-        """
-        if value:
-            # return queryset.filter(Q(expiration__lt=date.today()) & Q(auto_renew=False))
-            return queryset.filter(Q(expiration__gte=date.today()) | Q(auto_renew=True))
-        return queryset
+        fields = ["health_status", "domain_status"]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -91,12 +87,12 @@ class DomainFilter(django_filters.FilterSet):
         self.helper.layout = Layout(
             Row(
                 Column(
-                    PrependedText("name", '<i class="fas fa-filter"></i>'),
+                    PrependedText("domain", '<i class="fas fa-filter"></i>'),
                     css_class="col-md-6",
                 ),
                 Column(
-                    PrependedText("categorization", '<i class="fas fa-filter"></i>'),
-                    css_class="col-md-6",
+                    PrependedText("tags", '<i class="fas fa-tag"></i>'),
+                    css_class="form-group col-md-6 mb-0",
                 ),
                 css_class="form-row",
             ),
@@ -116,8 +112,27 @@ class DomainFilter(django_filters.FilterSet):
                     <a class="btn btn-outline-secondary col-md-2" role="button" href="{%  url 'shepherd:domains' %}">Reset</a>
                     """
                 ),
+                css_class="mt-3",
             ),
         )
+
+    def search_tags(self, queryset, name, value):
+        """Filter reports by tags."""
+        return queryset.filter(tags__name__in=[value]).distinct()
+
+    def filter_expired(self, queryset, name, value):
+        """
+        Choose to include or exclude expired domains in search results.
+        """
+        if value:
+            return queryset.filter(Q(expiration__gte=date.today()) | Q(auto_renew=True))
+        return queryset
+
+    def search_name_and_category(self, queryset, name, value):
+        """
+        Search for a value that appears in either the :model:`shepherd.Domain` `name` and `categorization` fields.
+        """
+        return queryset.filter(Q(name__icontains=value) | Q(categorization__icontains=value))
 
 
 class ServerFilter(django_filters.FilterSet):
@@ -126,23 +141,29 @@ class ServerFilter(django_filters.FilterSet):
 
     **Fields**
 
-    ``io_address``
-        Case insensitive search of the ip_address field contents
-    ``name``
-        Case insensitive search of the name field contents
+    ``server``
+        Case insensitive search of the `ip_address` and `name` fields tied to
+        :model:`shepherd.StaticServer` and :model:`shepherd.AuxServerAddress`
     ``server_status``
         Checkbox choice filter using :model:`shepherd.ServerStatus`
+    ``tags``
+        Search of the `tags` field
     """
 
-    ip_address = django_filters.CharFilter(
-        lookup_expr="icontains",
-        label="IP Address Contains",
-        widget=TextInput(attrs={"placeholder": "IP Address", "autocomplete": "off"}),
+    server = django_filters.CharFilter(
+        method="search_name_and_address",
+        label="IP Address or Hostname Contains",
+        widget=TextInput(attrs={"placeholder": "Partial IP Address or Hostname", "autocomplete": "off"}),
     )
-    name = django_filters.CharFilter(
-        lookup_expr="icontains",
-        label="Server Name Contains",
-        widget=TextInput(attrs={"placeholder": "Hostname", "autocomplete": "off"}),
+    tags = django_filters.CharFilter(
+        method="search_tags",
+        label="Server Tags Contain",
+        widget=TextInput(
+            attrs={
+                "placeholder": "Server Tag",
+                "autocomplete": "off",
+            }
+        ),
     )
     server_status = django_filters.ModelMultipleChoiceFilter(
         queryset=ServerStatus.objects.all(),
@@ -152,23 +173,23 @@ class ServerFilter(django_filters.FilterSet):
 
     class Meta:
         model = Domain
-        fields = ["ip_address", "name", "server_status"]
+        fields = ["server_status"]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper()
         self.helper.form_method = "get"
-        self.helper.form_show_labels = False
+        self.helper.form_show_labels = True
         # Layout the form for Bootstrap
         self.helper.layout = Layout(
             Row(
                 Column(
-                    PrependedText("ip_address", '<i class="fas fa-filter"></i>'),
-                    css_class="col-md-6",
+                    PrependedText("server", '<i class="fas fa-filter"></i>'),
+                    css_class="form-group col-md-6 mb-0",
                 ),
                 Column(
-                    PrependedText("name", '<i class="fas fa-filter"></i>'),
-                    css_class=" col-md-6",
+                    PrependedText("tags", '<i class="fas fa-tag"></i>'),
+                    css_class="form-group col-md-6 mb-0",
                 ),
                 css_class="form-row",
             ),
@@ -187,5 +208,19 @@ class ServerFilter(django_filters.FilterSet):
                     <a class="btn btn-outline-secondary col-md-2" role="button" href="{%  url 'shepherd:servers' %}">Reset</a>
                     """
                 ),
+                css_class="mt-3",
             ),
+        )
+
+    def search_tags(self, queryset, name, value):
+        """Filter reports by tags."""
+        return queryset.filter(tags__name__in=[value]).distinct()
+
+    def search_name_and_address(self, queryset, name, value):
+        """
+        Search for a value that appears in either the :model:`shepherd.StaticServer` `name` and `ip_address` fields
+        or the :model:`shepherd.AuxServerAddress` `ip_address` field.
+        """
+        return queryset.filter(
+            Q(ip_address__icontains=value) | Q(name__icontains=value) | Q(auxserveraddress__ip_address__icontains=value)
         )

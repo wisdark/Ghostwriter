@@ -71,7 +71,7 @@ class BearerAuth(requests.auth.AuthBase):
 
 def namecheap_reset_dns(namecheap_config, domain):
     """
-    Try to use the Namecheap API to reset th DNS records for a target domain.
+    Try to use the Namecheap API to reset the DNS records for a target domain.
 
     **Parameters**
 
@@ -193,8 +193,9 @@ def release_domains(no_action=False):
             # Check if tomorrow is the end date
             if date.today() == warning_date:
                 release_me = False
-                message = "Your domain, {}, will be released tomorrow! Modify the project's end date as needed.".format(
-                    domain.name
+                message = "Reminder: your project is ending soon and your domain, {}, will be released when it does. If your project is still ending after EOB on {}, you don't need to do anything!".format(
+                    domain.name,
+                    release_date,
                 )
                 if slack.enabled:
                     err = slack.send_msg(message, slack_channel)
@@ -237,7 +238,7 @@ def release_domains(no_action=False):
                 domain_updates[domain.id]["change"] = "released"
 
             # Handle DNS record resets
-            if domain.reset_dns:
+            if domain.reset_dns and domain.registrar:
                 if namecheap_config.enable and domain.registrar.lower() == "namecheap":
                     reset_result = namecheap_reset_dns(namecheap_config, domain)
                     domain_updates[domain.id]["dns"] = reset_result["result"]
@@ -392,10 +393,19 @@ def check_domains(domain_id=None):
             if lab_results[k]["burned"]:
                 domain_qs.health_status = HealthStatus.objects.get(health_status="Burned")
                 change = "burned"
+                pretty_categories = []
+                for vendor, category in lab_results[k]["categories"].items():
+                    pretty_categories.append(f"{vendor}: {category}")
+
+                scanners = "N/A"
+                if lab_results[k]["scanners"]:
+                    scanners = "\n".join(lab_results[k]["scanners"])
+
                 if slack.enabled:
                     blocks = slack.craft_burned_msg(
                         v["domain"],
-                        lab_results[k]["categories"],
+                        "\n".join(pretty_categories),
+                        scanners,
                         lab_results[k]["burned_explanation"],
                     )
                     if slack.enabled:
@@ -749,9 +759,12 @@ def fetch_namecheap_domains():
         # Get the current list of Namecheap domains in the library
         domain_queryset = Domain.objects.filter(registrar="Namecheap")
         expired_status = DomainStatus.objects.get(domain_status="Expired")
+        burned_status = DomainStatus.objects.get(domain_status="Burned")
+        health_burned_status = HealthStatus.objects.get(health_status="Burned")
         for domain in domain_queryset:
             # Check if a domain in the library is _not_ in the Namecheap response
             if not any(d["Name"] == domain.name for d in domains_list):
+                logger.info("Domain %s is not in the Namecheap data", domain.name)
                 # Domains not found in Namecheap have expired and fallen off the account
                 if not domain.expired:
                     logger.info(
@@ -798,32 +811,36 @@ def fetch_namecheap_domains():
                 entry["expired"] = True
                 # Expired domains have WhoisGuard set to ``NOTPRESENT``
                 entry["whois_status"] = WhoisStatus.objects.get(pk=2)
+                entry["domain_status"] = expired_status
             else:
-                try:
-                    entry["whois_status"] = WhoisStatus.objects.get(
-                        whois_status__iexact=domain["WhoisGuard"].capitalize()
-                    )
-                # Anything not ``Enabled`` or ``Disabled``, set to ``Unknown``
-                except Exception:
-                    logger.exception(
-                        "Namecheap WHOIS status (%s) was not found in the database, so defaulted to `Unknown`",
-                        domain["WhoisGuard"].capitalize(),
-                    )
-                    entry["whois_status"] = WhoisStatus.objects.get(pk=3)
+                if domain["WhoisGuard"].lower() == "notpresent":
+                    entry["whois_status"] = WhoisStatus.objects.get(pk=2)
+                else:
+                    try:
+                        entry["whois_status"] = WhoisStatus.objects.get(
+                            whois_status__iexact=domain["WhoisGuard"].capitalize()
+                        )
+                    # Anything not ``Enabled`` or ``Disabled``, set to ``Unknown``
+                    except Exception:
+                        logger.exception(
+                            "Namecheap WHOIS status (%s) was not found in the database, so defaulted to `Unknown`",
+                            domain["WhoisGuard"].capitalize(),
+                        )
+                        entry["whois_status"] = WhoisStatus.objects.get(pk=3)
 
             # Check if the domain is locked - locked generally means it's burned
             newly_burned = False
             if domain["IsLocked"] == "true":
                 logger.warning("Domain %s is marked as LOCKED by Namecheap", domain["Name"])
                 newly_burned = True
-                entry["health_status"] = HealthStatus.objects.get(health_status="Burned")
-                entry["domain_status"] = DomainStatus.objects.get(domain_status="Burned")
+                entry["health_status"] = health_burned_status
+                entry["domain_status"] = burned_status
                 entry[
                     "burned_explanation"
                 ] = "<p>Namecheap has locked the domain. This is usually the result of a legal complaint related to phishing/malicious activities.</p>"
 
             # Set AutoRenew status
-            if domain["AutoRenew"] == "false":
+            if domain["AutoRenew"] == "false" or domain["IsExpired"] == "true":
                 entry["auto_renew"] = False
 
             # Convert Namecheap dates to Django
@@ -911,7 +928,7 @@ def json_datetime_converter(dt):
     return None
 
 
-def review_cloud_infrastructure(aws_only_running=False):
+def review_cloud_infrastructure(aws_only_running=False, do_only_running=False):
     """
     Fetch active virtual machines/instances in Digital Ocean, Azure, and AWS and
     compare IP addresses to project infrastructure. Send a report to Slack if any
@@ -924,6 +941,8 @@ def review_cloud_infrastructure(aws_only_running=False):
 
     ``aws_only_running``
         Filter out any shutdown AWS resources, where possible (Default: False)
+    ``do_only_running``
+        Filter out any shutdown Digital Ocean resources, where possible (Default: False)
     """
     # Fetch cloud API keys and tokens
     cloud_config = CloudServicesConfiguration.get_solo()
@@ -983,7 +1002,7 @@ def review_cloud_infrastructure(aws_only_running=False):
     ###############
 
     logger.info("Checking Digital Ocean droplets")
-    do_results = fetch_digital_ocean(cloud_config.do_api_key, ignore_tags)
+    do_results = fetch_digital_ocean(cloud_config.do_api_key, ignore_tags, do_only_running)
     if do_results["message"]:
         vps_info["errors"]["digital_ocean"] = do_results["message"]
     else:
@@ -1032,24 +1051,24 @@ def review_cloud_infrastructure(aws_only_running=False):
                             instance_name,
                             instance["public_ip"],
                             instance["tags"],
+                            instance["state"],
                         )
-                        if slack.enabled:
-                            if result.project.slack_channel:
-                                err = slack.send_msg(
-                                    message=f"Teardown notification for {result.project}",
-                                    channel=result.project.slack_channel,
-                                    blocks=blocks,
-                                )
-                            else:
-                                err = slack.send_msg(
-                                    message=f"Teardown notification for {result.project}",
-                                    blocks=blocks,
-                                )
-                            if err:
-                                logger.warning(
-                                    "Attempt to send a Slack notification returned an error: %s",
-                                    err,
-                                )
+                        if result.project.slack_channel:
+                            err = slack.send_msg(
+                                message=f"Teardown notification for {result.project}",
+                                channel=result.project.slack_channel,
+                                blocks=blocks,
+                            )
+                        else:
+                            err = slack.send_msg(
+                                message=f"Teardown notification for {result.project}",
+                                blocks=blocks,
+                            )
+                        if err:
+                            logger.warning(
+                                "Attempt to send a Slack notification returned an error: %s",
+                                err,
+                            )
                 else:
                     # Project is still active, so track these assets for later
                     assets_in_use.append(instance_id)
@@ -1072,6 +1091,7 @@ def review_cloud_infrastructure(aws_only_running=False):
                         instance_name,
                         instance["public_ip"],
                         instance["tags"],
+                        instance["state"],
                     )
                     err = slack.send_msg(
                         message="Untracked cloud asset found",
@@ -1167,7 +1187,7 @@ def test_digital_ocean(user):
     Test the Digital Ocean API key configured in
     :model:`commandcenter.CloudServicesConfiguration`.
     """
-    DIGITAL_OCEAN_ENDPOINT = "https://api.digitalocean.com/v2/droplets"
+    digital_ocean_endpoint = "https://api.digitalocean.com/v2/droplets"
     cloud_config = CloudServicesConfiguration.get_solo()
     level = "error"
     logger.info("Starting a test of the Digital Ocean API key at %s", datetime.now())
@@ -1175,7 +1195,7 @@ def test_digital_ocean(user):
         # Request all active droplets (as done in the real task)
         headers = {"Content-Type": "application/json"}
         active_droplets = requests.get(
-            DIGITAL_OCEAN_ENDPOINT,
+            digital_ocean_endpoint,
             headers=headers,
             auth=BearerAuth(cloud_config.do_api_key),
         )

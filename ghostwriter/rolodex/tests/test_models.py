@@ -20,6 +20,7 @@ from ghostwriter.factories import (
     OplogEntryFactory,
     OplogFactory,
     ProjectAssignmentFactory,
+    ProjectContactFactory,
     ProjectFactory,
     ProjectInviteFactory,
     ProjectNoteFactory,
@@ -79,18 +80,18 @@ class ClientContactModelTests(TestCase):
 
     def test_crud_finding(self):
         # Create
-        client = ClientContactFactory(name="David")
+        contact = ClientContactFactory(name="David")
 
         # Read
-        self.assertEqual(client.name, "David")
-        self.assertEqual(client.pk, client.id)
+        self.assertEqual(contact.name, "David")
+        self.assertEqual(contact.pk, contact.id)
 
         # Update
-        client.name = "Kabletown"
-        client.save()
+        contact.name = "Jason"
+        contact.save()
 
         # Delete
-        client.delete()
+        contact.delete()
         assert not self.ClientContact.objects.all().exists()
 
 
@@ -190,12 +191,12 @@ class ProjectModelTests(TestCase):
         self.assertEqual(project.count_findings(), 3)
 
     def test_update_project_signal(self):
-        project = ProjectFactory(slack_channel=None)
+        project = ProjectFactory(slack_channel="")
         project.end_date = project.end_date + timedelta(days=1)
         project.save()
         project.slack_channel = "#testing"
         project.save()
-        project.slack_channel = None
+        project.slack_channel = ""
         project.save()
 
 
@@ -640,3 +641,27 @@ class WhiteCardModelTests(TestCase):
         # Delete
         card.delete()
         assert not self.WhiteCard.objects.all().exists()
+
+
+class ProjectContactModelTests(TestCase):
+    """Collection of tests for :model:`rolodex.ProjectContact`."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.ProjectContact = ProjectContactFactory._meta.model
+
+    def test_crud_finding(self):
+        # Create
+        contact = ProjectContactFactory(name="David")
+
+        # Read
+        self.assertEqual(contact.name, "David")
+        self.assertEqual(contact.pk, contact.id)
+
+        # Update
+        contact.name = "Kabletown"
+        contact.save()
+
+        # Delete
+        contact.delete()
+        assert not self.ProjectContact.objects.all().exists()

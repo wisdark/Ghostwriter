@@ -3,6 +3,7 @@
 # Django Imports
 from django.urls import path
 
+# Ghostwriter Libraries
 from ghostwriter.reporting import views
 
 app_name = "reporting"
@@ -10,15 +11,16 @@ app_name = "reporting"
 # URLs for the basic views
 urlpatterns = [
     path("", views.index, name="index"),
-    path("findings/", views.findings_list, name="findings"),
-    path("reports/", views.reports_list, name="reports"),
+    path("findings/", views.FindingListView.as_view(), name="findings"),
+    path("reports/", views.ReportListView.as_view(), name="reports"),
     path("templates/", views.ReportTemplateListView.as_view(), name="templates"),
     path("reports/archive", views.archive_list, name="archived_reports"),
     path(
         "reports/archive/download/<int:pk>/",
-        views.download_archive,
+        views.ArchiveDownloadView.as_view(),
         name="download_archive",
     ),
+    path("observations/", views.ObservationListView.as_view(), name="observations"),
 ]
 
 # URLs for AJAX requests – deletion and toggle views
@@ -27,6 +29,11 @@ urlpatterns += [
         "ajax/report/finding/order",
         views.ajax_update_report_findings,
         name="update_report_findings",
+    ),
+    path(
+        "ajax/report/observation/order",
+        views.ajax_update_report_observations,
+        name="update_report_observations",
     ),
     path(
         "ajax/report/activate/<int:pk>",
@@ -69,6 +76,16 @@ urlpatterns += [
         name="ajax_delete_local_finding",
     ),
     path(
+        "ajax/observation/assign/<int:pk>",
+        views.AssignObservation.as_view(),
+        name="ajax_assign_observation",
+    ),
+    path(
+        "ajax/obseravation/delete/<int:pk>",
+        views.ReportObservationLinkDelete.as_view(),
+        name="ajax_delete_local_observation",
+    ),
+    path(
         "ajax/report/template/swap/<int:pk>",
         views.ReportTemplateSwap.as_view(),
         name="ajax_swap_report_template",
@@ -103,6 +120,14 @@ urlpatterns += [
     ),
 ]
 
+# URLs for creating, updating, and deleting observations
+urlpatterns += [
+    path("observations/<int:pk>", views.ObservationDetailView.as_view(), name="observation_detail"),
+    path("observations/create/", views.ObservationCreate.as_view(), name="observation_create"),
+    path("observations/update/<int:pk>", views.ObservationUpdate.as_view(), name="observation_update"),
+    path("observations/delete/<int:pk>", views.ObservationDelete.as_view(), name="observation_delete"),
+]
+
 # URLs for creating, updating, and deleting reports
 urlpatterns += [
     path("reports/<int:pk>", views.ReportDetailView.as_view(), name="report_detail"),
@@ -114,12 +139,22 @@ urlpatterns += [
     ),
     path("reports/update/<int:pk>", views.ReportUpdate.as_view(), name="report_update"),
     path("reports/delete/<int:pk>", views.ReportDelete.as_view(), name="report_delete"),
-    path("reports/archive/<int:pk>", views.archive, name="archive"),
+    path("reports/archive/<int:pk>", views.ArchiveView.as_view(), name="archive"),
     path("reports/clone/<int:pk>", views.ReportClone.as_view(), name="report_clone"),
     path(
         "reports/create/blank/<int:pk>",
         views.AssignBlankFinding.as_view(),
         name="assign_blank_finding",
+    ),
+    path(
+        "reports/create/blank-observation/<int:pk>",
+        views.AssignBlankObservation.as_view(),
+        name="assign_blank_observation",
+    ),
+    path(
+        "reports/<int:pk>/edit-extra-field/<str:extra_field_name>",
+        views.ReportExtraFieldEdit.as_view(),
+        name="report_extra_field_edit",
     ),
     path(
         "templates/<int:pk>",
@@ -146,6 +181,16 @@ urlpatterns += [
         views.ReportTemplateDownload.as_view(),
         name="template_download",
     ),
+    path(
+        "evidence/download/<int:pk>",
+        views.EvidenceDownload.as_view(),
+        name="evidence_download",
+    ),
+    path(
+        "evidence/preview/<int:pk>",
+        views.EvidencePreview.as_view(),
+        name="evidence_preview",
+    ),
 ]
 
 # URLs for local edits
@@ -156,12 +201,17 @@ urlpatterns += [
         name="local_edit",
     ),
     path(
-        "reports/evidence/upload/<int:pk>",
+        "reports/observations/update/<int:pk>",
+        views.ReportObservationLinkUpdate.as_view(),
+        name="local_observation_edit",
+    ),
+    path(
+        "reports/evidence/upload/<str:parent_type>/<int:pk>",
         views.EvidenceCreate.as_view(),
         name="upload_evidence",
     ),
     path(
-        "reports/evidence/upload/<int:pk>/<str:modal>",
+        "reports/evidence/upload/<str:parent_type>/<int:pk>/<str:modal>",
         views.EvidenceCreate.as_view(),
         name="upload_evidence_modal",
     ),
@@ -200,6 +250,11 @@ urlpatterns += [
         views.ConvertFinding.as_view(),
         name="convert_finding",
     ),
+    path(
+        "reports/observations/convert/<int:pk>",
+        views.ConvertObservation.as_view(),
+        name="convert_observation",
+    ),
 ]
 
 # URLs for generating reports
@@ -230,4 +285,5 @@ urlpatterns += [
 # URLs for management functions
 urlpatterns += [
     path("export/findings/csv/", views.export_findings_to_csv, name="export_findings_to_csv"),
+    path("export/observations/csv/", views.export_observations_to_csv, name="export_observations_to_csv"),
 ]

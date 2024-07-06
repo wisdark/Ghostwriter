@@ -1,28 +1,11 @@
-[{
-    "model": "reporting.severity",
-    "pk": 1,
-    "fields": {
-      "severity": "Informational",
-      "weight": 5,
-      "color": "8EAADB"
-    }
-  },
+[
   {
     "model": "reporting.severity",
-    "pk": 2,
+    "pk": 5,
     "fields": {
-      "severity": "Low",
-      "weight": 4,
-      "color": "A8D08D"
-    }
-  },
-  {
-    "model": "reporting.severity",
-    "pk": 3,
-    "fields": {
-      "severity": "Medium",
-      "weight": 3,
-      "color": "F4B083"
+      "severity": "Critical",
+      "weight": 1,
+      "color": "966FD6"
     }
   },
   {
@@ -36,11 +19,29 @@
   },
   {
     "model": "reporting.severity",
-    "pk": 5,
+    "pk": 3,
     "fields": {
-      "severity": "Critical",
-      "weight": 1,
-      "color": "966FD6"
+      "severity": "Medium",
+      "weight": 3,
+      "color": "F4B083"
+    }
+  },
+  {
+    "model": "reporting.severity",
+    "pk": 2,
+    "fields": {
+      "severity": "Low",
+      "weight": 4,
+      "color": "A8D08D"
+    }
+  },
+  {
+    "model": "reporting.severity",
+    "pk": 1,
+    "fields": {
+      "severity": "Informational",
+      "weight": 5,
+      "color": "8EAADB"
     }
   },
   {
@@ -96,14 +97,27 @@
     "model": "reporting.doctype",
     "pk": 1,
     "fields": {
-      "doc_type": "docx"
+      "doc_type": "docx",
+      "name": "Report DOCX",
+      "extension": "docx"
     }
   },
   {
     "model": "reporting.doctype",
     "pk": 2,
     "fields": {
-      "doc_type": "pptx"
+      "doc_type": "pptx",
+      "name": "PPTX",
+      "extension": "pptx"
+    }
+  },
+  {
+    "model": "reporting.doctype",
+    "pk": 3,
+    "fields": {
+      "doc_type": "project_docx",
+      "name": "Project DOCX",
+      "extension": "docx"
     }
   },
   {
@@ -113,9 +127,10 @@
       "name": "Default Word Template",
       "document": "/app/ghostwriter/media/templates/template.docx",
       "description": "A sample Word template provided by Ghostwriter.",
-      "upload_date": "2020-11-12",
-      "last_update": "2020-11-12",
+      "upload_date": "2023-09-19",
+      "last_update": "2023-09-19",
       "doc_type": 1,
+      "p_style": "Normal",
       "lint_result": "{\"result\": \"success\", \"warnings\": [], \"errors\": []}"
     }
   },
@@ -126,8 +141,8 @@
       "name": "Default PowerPoint Template",
       "document": "/app/ghostwriter/media/templates/template.pptx",
       "description": "A sample PowerPoint presentation template provided by Ghostwriter.",
-      "upload_date": "2020-11-12",
-      "last_update": "2020-11-12",
+      "upload_date": "2023-09-19",
+      "last_update": "2023-09-19",
       "doc_type": 2,
       "lint_result": "{\"result\": \"success\", \"warnings\": [], \"errors\": []}"
     }

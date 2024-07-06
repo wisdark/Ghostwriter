@@ -3,13 +3,13 @@
 # Standard Libraries
 from datetime import datetime
 
-# 3rd Party Libraries
-import pytz
-from bs4 import BeautifulSoup
-
 # Django Imports
 from django.conf import settings
 from django.utils import dateformat
+
+# 3rd Party Libraries
+import pytz
+from bs4 import BeautifulSoup
 from rest_framework import serializers
 from rest_framework.serializers import (
     RelatedField,
@@ -20,13 +20,15 @@ from taggit.serializers import TaggitSerializer, TagListSerializerField
 from timezone_field.rest_framework import TimeZoneSerializerField
 
 # Ghostwriter Libraries
-from ghostwriter.commandcenter.models import CompanyInformation
-from ghostwriter.oplog.models import OplogEntry
+from ghostwriter.commandcenter.models import CompanyInformation, ExtraFieldSpec
+from ghostwriter.oplog.models import Oplog, OplogEntry
 from ghostwriter.reporting.models import (
     Evidence,
     Finding,
+    Observation,
     Report,
     ReportFindingLink,
+    ReportObservationLink,
     ReportTemplate,
 )
 from ghostwriter.rolodex.models import (
@@ -35,6 +37,7 @@ from ghostwriter.rolodex.models import (
     Deconfliction,
     Project,
     ProjectAssignment,
+    ProjectContact,
     ProjectNote,
     ProjectObjective,
     ProjectScope,
@@ -104,6 +107,37 @@ class CloudServerField(RelatedField):
         return value.ip_address
 
 
+class ExtraFieldsSerField(serializers.Field):
+    """Fills out defaults in the `extra_fields` field from the definitions in :model:`commandcenter.ExtraFieldSpec`"""
+
+    def __init__(self, model_name, **kwargs):
+        self.model_name = model_name
+        self.root_ser = None
+        kwargs['read_only'] = True
+        super().__init__(**kwargs)
+
+    def bind(self, field_name, parent):
+        super().bind(field_name, parent)
+        root_ser = parent
+        while getattr(root_ser, "parent", None) is not None:
+            root_ser = root_ser.parent
+        self.root_ser = root_ser
+
+    def to_representation(self, value):
+        out = {}
+
+        # Fetch field specs, and cache them at the root serializer
+        if not hasattr(self.root_ser, "_extra_fields_specs") or self.root_ser._extra_fields_specs is None:
+            self.root_ser._extra_fields_specs = {}
+        if self.model_name not in self.root_ser._extra_fields_specs:
+            self.root_ser._extra_fields_specs[self.model_name] = ExtraFieldSpec.objects.filter(target_model=self.model_name)
+
+        # Populate output
+        for field in self.root_ser._extra_fields_specs[self.model_name]:
+            out[field.internal_name] = field.value_of(value)
+        return out
+
+
 class UserSerializer(CustomModelSerializer):
     """Serialize :model:`users:User` entries."""
 
@@ -123,32 +157,28 @@ class CompanyInfoSerializer(CustomModelSerializer):
     """Serialize :model:`commandcenter:CompanyInformation` entries."""
 
     name = serializers.CharField(source="company_name")
+    short_name = serializers.CharField(source="company_short_name")
+    address = serializers.CharField(source="company_address")
     twitter = serializers.CharField(source="company_twitter")
     email = serializers.CharField(source="company_email")
 
     class Meta:
         model = CompanyInformation
-        exclude = ["id", "company_name", "company_twitter", "company_email"]
+        exclude = ["id", "company_name", "company_short_name", "company_address", "company_twitter", "company_email"]
 
 
 class EvidenceSerializer(TaggitSerializer, CustomModelSerializer):
     """Serialize :model:`reporting:Evidence` entries."""
 
     path = SerializerMethodField("get_path")
-    url = SerializerMethodField("get_url")
     tags = TagListSerializerField()
 
     class Meta:
         model = Evidence
-        exclude = [
-            "document",
-        ]
+        exclude = ["document"]
 
     def get_path(self, obj):
         return str(obj.document)
-
-    def get_url(self, obj):
-        return obj.document.url
 
 
 class FindingSerializer(TaggitSerializer, CustomModelSerializer):
@@ -160,6 +190,7 @@ class FindingSerializer(TaggitSerializer, CustomModelSerializer):
     severity_color_rgb = SerializerMethodField("get_severity_color_rgb")
     severity_color_hex = SerializerMethodField("get_severity_color_hex")
     tags = TagListSerializerField()
+    extra_fields = ExtraFieldsSerField(Finding._meta.label)
 
     class Meta:
         model = Finding
@@ -184,6 +215,7 @@ class FindingLinkSerializer(TaggitSerializer, CustomModelSerializer):
     severity_color = SerializerMethodField("get_severity_color")
     severity_color_rgb = SerializerMethodField("get_severity_color_rgb")
     severity_color_hex = SerializerMethodField("get_severity_color_hex")
+    extra_fields = ExtraFieldsSerField(Finding._meta.label)
     tags = TagListSerializerField()
 
     # Include a copy of the ``mitigation`` field as ``recommendation`` to match legacy JSON output
@@ -193,6 +225,7 @@ class FindingLinkSerializer(TaggitSerializer, CustomModelSerializer):
         source="evidence_set",
         many=True,
         exclude=[
+            "report",
             "finding",
             "uploaded_by",
         ],
@@ -217,6 +250,18 @@ class FindingLinkSerializer(TaggitSerializer, CustomModelSerializer):
         return obj.severity.color_hex
 
 
+class ObservationLinkSerializer(TaggitSerializer, CustomModelSerializer):
+    """Serialize :model:`reporting:ObservationLinkSerializer` entries."""
+
+    tags = TagListSerializerField()
+
+    extra_fields = ExtraFieldsSerField(Observation._meta.label)
+
+    class Meta:
+        model = ReportObservationLink
+        fields = "__all__"
+
+
 class ReportTemplateSerializer(CustomModelSerializer):
     """Serialize :model:`reporting:ReportTemplate` entries."""
 
@@ -235,6 +280,7 @@ class ReportSerializer(TaggitSerializer, CustomModelSerializer):
     total_findings = SerializerMethodField("get_total_findings")
 
     findings = FindingLinkSerializer(source="reportfindinglink_set", many=True, exclude=["id", "report"])
+    observations = ObservationLinkSerializer(source="reportobservationlink_set", many=True, exclude=["id", "report"])
 
     tags = TagListSerializerField()
 
@@ -279,6 +325,8 @@ class ClientSerializer(TaggitSerializer, CustomModelSerializer):
     timezone = TimeZoneSerializerField()
 
     tags = TagListSerializerField()
+
+    extra_fields = ExtraFieldsSerField(Client._meta.label)
 
     class Meta:
         model = Client
@@ -436,16 +484,6 @@ class AuxServerAddressSerializer(CustomModelSerializer):
         fields = "__all__"
 
 
-class DomainSerializer(TaggitSerializer, CustomModelSerializer):
-    """Serialize :model:`shepherd:Domain` entries."""
-
-    tags = TagListSerializerField()
-
-    class Meta:
-        model = Domain
-        fields = "__all__"
-
-
 class DomainServerConnectionSerializer(CustomModelSerializer):
     """Serialize :model:`shepherd:DomainServerConnection` entries."""
 
@@ -476,6 +514,11 @@ class DomainHistorySerializer(CustomModelSerializer):
         exclude=["id", "project", "domain"],
     )
 
+    extra_fields = ExtraFieldsSerField(
+        Domain._meta.label,
+        source="domain.extra_fields"
+    )
+
     class Meta:
         model = History
         exclude = [
@@ -499,6 +542,7 @@ class StaticServerSerializer(TaggitSerializer, CustomModelSerializer):
     status = serializers.CharField(source="server_status")
     last_used_by = StringRelatedField()
     tags = TagListSerializerField()
+    extra_fields = ExtraFieldsSerField(StaticServer._meta.label)
 
     class Meta:
         model = StaticServer
@@ -521,6 +565,11 @@ class ServerHistorySerializer(CustomModelSerializer):
         source="domainserverconnection_set",
         many=True,
         exclude=["id", "project", "static_server", "transient_server"],
+    )
+
+    extra_fields = ExtraFieldsSerField(
+        StaticServer._meta.label,
+        source="server.extra_fields"
     )
 
     class Meta:
@@ -569,6 +618,16 @@ class TransientServerSerializer(CustomModelSerializer):
         ]
 
 
+class ProjectContactSerializer(CustomModelSerializer):
+    """Serialize :model:`rolodex:ProjectContact` entries."""
+
+    timezone = TimeZoneSerializerField()
+
+    class Meta:
+        model = ProjectContact
+        fields = "__all__"
+
+
 class ProjectSerializer(TaggitSerializer, CustomModelSerializer):
     """Serialize :model:`rolodex:Project` entries."""
 
@@ -588,6 +647,7 @@ class ProjectSerializer(TaggitSerializer, CustomModelSerializer):
     notes = ProjectNoteSerializer(source="projectnote_set", many=True, exclude=["id", "project"])
 
     tags = TagListSerializerField()
+    extra_fields = ExtraFieldsSerField(Project._meta.label)
 
     class Meta:
         model = Project
@@ -674,10 +734,66 @@ class OplogEntrySerializer(TaggitSerializer, CustomModelSerializer):
     """Serialize :model:`oplog.OplogEntry` entries."""
 
     tags = TagListSerializerField()
+    extra_fields = ExtraFieldsSerField(OplogEntry._meta.label)
 
     class Meta:
         model = OplogEntry
         fields = "__all__"
+
+
+class OplogSerializer(TaggitSerializer, CustomModelSerializer):
+    """Serialize :model:`oplog.Oplog` entries."""
+
+    entries = OplogEntrySerializer(
+        many=True,
+        exclude=["id", "oplog_id"],
+    )
+
+    class Meta:
+        model = Oplog
+        fields = "__all__"
+
+
+class FullProjectSerializer(serializers.Serializer):
+    """Serialize :model:`rolodex:Project` and related entries."""
+    project = ProjectSerializer(source="*")
+    client = ClientSerializer()
+    contacts = ProjectContactSerializer(source="projectcontact_set", many=True, exclude=["id", "project"])
+    team = ProjectAssignmentSerializer(source="projectassignment_set", many=True, exclude=["id", "project"])
+    objectives = ProjectObjectiveSerializer(source="projectobjective_set", many=True, exclude=["id", "project"])
+    targets = ProjectTargetSerializer(source="projecttarget_set", many=True, exclude=["id", "project"])
+    scope = ProjectScopeSerializer(source="projectscope_set", many=True, exclude=["id", "project"])
+    deconflictions = DeconflictionSerializer(source="deconfliction_set", many=True, exclude=["id", "project"])
+    whitecards = WhiteCardSerializer(source="whitecard_set", many=True, exclude=["id", "project"])
+    infrastructure = ProjectInfrastructureSerializer(source="*")
+    logs = OplogSerializer(source="oplog_set", many=True, exclude=["id", "mute_notifications", "project"])
+    report_date = SerializerMethodField("get_report_date")
+    company = SerializerMethodField("get_company_info")
+    tools = SerializerMethodField("get_tools")
+    recipient = SerializerMethodField("get_recipient")
+
+    def get_report_date(self, obj):
+        return dateformat.format(datetime.now(), settings.DATE_FORMAT)
+
+    def get_company_info(self, obj):
+        serializer = CompanyInfoSerializer(CompanyInformation.get_solo())
+        return serializer.data
+
+    def get_tools(self, obj):
+        tools = []
+        for oplog in obj.oplog_set.all():
+            for entry in oplog.entries.all():
+                if entry.tool and entry.tool.lower() not in tools:
+                    tools.append(entry.tool.lower())
+        return tools
+
+    def get_recipient(self, obj):
+        primary = None
+        for contact in obj.projectcontact_set.all():
+            if contact.primary:
+                primary = contact
+                break
+        return ProjectContactSerializer(primary, exclude=["id", "project"]).data
 
 
 class ReportDataSerializer(CustomModelSerializer):
@@ -692,6 +808,8 @@ class ReportDataSerializer(CustomModelSerializer):
         ]
     )
     client = ClientSerializer(source="project.client")
+    recipient = SerializerMethodField("get_recipient")
+    contacts = ProjectContactSerializer(source="project.projectcontact_set", many=True, exclude=["id", "project"])
     team = ProjectAssignmentSerializer(source="project.projectassignment_set", many=True, exclude=["id", "project"])
     objectives = ProjectObjectiveSerializer(source="project.projectobjective_set", many=True, exclude=["id", "project"])
     targets = ProjectTargetSerializer(source="project.projecttarget_set", many=True, exclude=["id", "project"])
@@ -699,8 +817,16 @@ class ReportDataSerializer(CustomModelSerializer):
     deconflictions = DeconflictionSerializer(source="project.deconfliction_set", many=True, exclude=["id", "project"])
     whitecards = WhiteCardSerializer(source="project.whitecard_set", many=True, exclude=["id", "project"])
     infrastructure = ProjectInfrastructureSerializer(source="project")
+    evidence = EvidenceSerializer(source="evidence_set", many=True, exclude=["report", "finding"])
     findings = FindingLinkSerializer(
         source="reportfindinglink_set",
+        many=True,
+        exclude=[
+            "report",
+        ],
+    )
+    observations = ObservationLinkSerializer(
+        source="reportobservationlink_set",
         many=True,
         exclude=[
             "report",
@@ -730,7 +856,10 @@ class ReportDataSerializer(CustomModelSerializer):
             "client",
         ]
     )
+    logs = OplogSerializer(source="project.oplog_set", many=True, exclude=["id", "mute_notifications", "project"])
     company = SerializerMethodField("get_company_info")
+    tools = SerializerMethodField("get_tools")
+    extra_fields = ExtraFieldsSerField(Report._meta.label)
 
     class Meta:
         model = Report
@@ -743,6 +872,22 @@ class ReportDataSerializer(CustomModelSerializer):
     def get_company_info(self, obj):
         serializer = CompanyInfoSerializer(CompanyInformation.get_solo())
         return serializer.data
+
+    def get_tools(self, obj):
+        tools = []
+        for oplog in obj.project.oplog_set.all():
+            for entry in oplog.entries.all():
+                if entry.tool and entry.tool.lower() not in tools:
+                    tools.append(entry.tool.lower())
+        return tools
+
+    def get_recipient(self, obj):
+        primary = None
+        for contact in obj.project.projectcontact_set.all():
+            if contact.primary:
+                primary = contact
+                break
+        return ProjectContactSerializer(primary, exclude=["id", "project"]).data
 
     def to_representation(self, instance):
         # Get the standard JSON from ``super()``
@@ -798,3 +943,9 @@ class ReportDataSerializer(CustomModelSerializer):
         rep["totals"]["targets"] = total_targets
 
         return rep
+
+
+class ExtraFieldsSpecSerializer(CustomModelSerializer):
+    class Meta:
+        model = ExtraFieldSpec
+        exclude = ["target_model"]

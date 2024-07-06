@@ -27,12 +27,15 @@ from crispy_forms.layout import (
 )
 
 # Ghostwriter Libraries
+from ghostwriter.commandcenter.forms import ExtraFieldsField
 from ghostwriter.commandcenter.models import GeneralConfiguration
 from ghostwriter.modules.custom_layout_object import CustomTab, Formset, SwitchToggle
+from ghostwriter.modules.reportwriter.forms import JinjaRichTextField
 from ghostwriter.rolodex.models import (
     Deconfliction,
     Project,
     ProjectAssignment,
+    ProjectContact,
     ProjectNote,
     ProjectObjective,
     ProjectScope,
@@ -77,7 +80,7 @@ class BaseProjectObjectiveInlineFormSet(BaseInlineFormSet):
                         form.add_error(
                             "objective",
                             ValidationError(
-                                _("Your project objectives must be unique"),
+                                _("Your project objectives must be unique."),
                                 code="duplicate",
                             ),
                         )
@@ -86,7 +89,7 @@ class BaseProjectObjectiveInlineFormSet(BaseInlineFormSet):
                         form.add_error(
                             "objective",
                             ValidationError(
-                                _("You set a deadline without an objective"),
+                                _("You set a deadline without an objective."),
                                 code="incomplete",
                             ),
                         )
@@ -94,7 +97,7 @@ class BaseProjectObjectiveInlineFormSet(BaseInlineFormSet):
                         form.add_error(
                             "deadline",
                             ValidationError(
-                                _("Your objective still needs a deadline"),
+                                _("Your objective still needs a deadline."),
                                 code="incomplete",
                             ),
                         )
@@ -113,7 +116,7 @@ class BaseProjectObjectiveInlineFormSet(BaseInlineFormSet):
                             form.add_error(
                                 "deadline",
                                 ValidationError(
-                                    _("Your selected date is before the project start date"),
+                                    _("Your selected date is before the project start date."),
                                     code="invalid_date",
                                 ),
                             )
@@ -121,7 +124,7 @@ class BaseProjectObjectiveInlineFormSet(BaseInlineFormSet):
                             form.add_error(
                                 "deadline",
                                 ValidationError(
-                                    _("Your selected date is after the project end date"),
+                                    _("Your selected date is after the project end date."),
                                     code="invalid_date",
                                 ),
                             )
@@ -152,6 +155,14 @@ class BaseProjectAssignmentInlineFormSet(BaseInlineFormSet):
 
                     # Check if the person has already been assigned to this project within the same time period
                     if operator and start_date and end_date:
+                        if end_date < start_date:
+                            form.add_error(
+                                "end_date",
+                                ValidationError(
+                                    _("Your end date is earlier than your start date."),
+                                    code="invalid_date",
+                                ),
+                            )
                         if any(operator.username in assign.user for assign in assignments):
                             for assign in assignments:
                                 if assign.user == operator.username:
@@ -167,7 +178,7 @@ class BaseProjectAssignmentInlineFormSet(BaseInlineFormSet):
                             form.add_error(
                                 "operator",
                                 ValidationError(
-                                    _("This operator is assigned more than once for an overlapping time period"),
+                                    _("This operator is assigned more than once for an overlapping time period."),
                                     code="duplicate",
                                 ),
                             )
@@ -178,7 +189,7 @@ class BaseProjectAssignmentInlineFormSet(BaseInlineFormSet):
                             form.add_error(
                                 "start_date",
                                 ValidationError(
-                                    _("Your assigned operator is missing a start date"),
+                                    _("Your assigned operator is missing a start date."),
                                     code="incomplete",
                                 ),
                             )
@@ -186,7 +197,7 @@ class BaseProjectAssignmentInlineFormSet(BaseInlineFormSet):
                             form.add_error(
                                 "end_date",
                                 ValidationError(
-                                    _("Your assigned operator is missing an end date"),
+                                    _("Your assigned operator is missing an end date."),
                                     code="incomplete",
                                 ),
                             )
@@ -194,7 +205,7 @@ class BaseProjectAssignmentInlineFormSet(BaseInlineFormSet):
                             form.add_error(
                                 "role",
                                 ValidationError(
-                                    _("Your assigned operator is missing a project role"),
+                                    _("Your assigned operator is missing a project role."),
                                     code="incomplete",
                                 ),
                             )
@@ -203,7 +214,7 @@ class BaseProjectAssignmentInlineFormSet(BaseInlineFormSet):
                         form.add_error(
                             "operator",
                             ValidationError(
-                                _("Your assignment is missing an operator"),
+                                _("Your assignment is missing an operator."),
                                 code="incomplete",
                             ),
                         )
@@ -212,7 +223,7 @@ class BaseProjectAssignmentInlineFormSet(BaseInlineFormSet):
                         form.add_error(
                             "note",
                             ValidationError(
-                                _("This note is part of an incomplete assignment form"),
+                                _("This note is part of an incomplete assignment form."),
                                 code="incomplete",
                             ),
                         )
@@ -222,7 +233,7 @@ class BaseProjectAssignmentInlineFormSet(BaseInlineFormSet):
                             form.add_error(
                                 "start_date",
                                 ValidationError(
-                                    _("Your selected date is before the project start date"),
+                                    _("Your selected date is before the project start date."),
                                     code="invalid_date",
                                 ),
                             )
@@ -230,7 +241,7 @@ class BaseProjectAssignmentInlineFormSet(BaseInlineFormSet):
                             form.add_error(
                                 "end_date",
                                 ValidationError(
-                                    _("Your selected date is after the project end date"),
+                                    _("Your selected date is after the project end date."),
                                     code="invalid_date",
                                 ),
                             )
@@ -265,7 +276,7 @@ class BaseProjectScopeInlineFormSet(BaseInlineFormSet):
                         form.add_error(
                             "name",
                             ValidationError(
-                                _("Your names must be unique"),
+                                _("Your names must be unique."),
                                 code="duplicate",
                             ),
                         )
@@ -274,7 +285,7 @@ class BaseProjectScopeInlineFormSet(BaseInlineFormSet):
                             form.add_error(
                                 "scope",
                                 ValidationError(
-                                    _("You scope list is missing"),
+                                    _("You scope list is missing."),
                                     code="incomplete",
                                 ),
                             )
@@ -282,7 +293,7 @@ class BaseProjectScopeInlineFormSet(BaseInlineFormSet):
                         form.add_error(
                             "name",
                             ValidationError(
-                                _("Your scope list is missing a name"),
+                                _("Your scope list is missing a name."),
                                 code="incomplete",
                             ),
                         )
@@ -319,7 +330,7 @@ class BaseProjectTargetInlineFormSet(BaseInlineFormSet):
                         form.add_error(
                             "hostname",
                             ValidationError(
-                                _("Your targets should be unique"),
+                                _("Your targets should be unique."),
                                 code="duplicate",
                             ),
                         )
@@ -331,7 +342,7 @@ class BaseProjectTargetInlineFormSet(BaseInlineFormSet):
                         form.add_error(
                             "ip_address",
                             ValidationError(
-                                _("Your targets should be unique"),
+                                _("Your targets should be unique."),
                                 code="duplicate",
                             ),
                         )
@@ -339,7 +350,7 @@ class BaseProjectTargetInlineFormSet(BaseInlineFormSet):
                         form.add_error(
                             "note",
                             ValidationError(
-                                _("You must provide a hostname or IP address with your note"),
+                                _("You must provide a hostname or IP address with your note."),
                                 code="incomplete",
                             ),
                         )
@@ -367,7 +378,7 @@ class BaseWhiteCardInlineFormSet(BaseInlineFormSet):
                         form.add_error(
                             "issued",
                             ValidationError(
-                                _("Your white card still needs an issued date and time"),
+                                _("Your white card still needs an issued date and time."),
                                 code="incomplete",
                             ),
                         )
@@ -375,21 +386,64 @@ class BaseWhiteCardInlineFormSet(BaseInlineFormSet):
                         form.add_error(
                             "title",
                             ValidationError(
-                                _("Your white card still needs a title"),
+                                _("Your white card still needs a title."),
                                 code="incomplete",
                             ),
                         )
-                    # Raise an error if dates are out of bounds
-                    # We only check if ``issued`` is after the project's end date because white cards can be issued prior to execution
+                    # Raise an error if dates are out of bounds. We only check if ``issued`` is after the project's
+                    # end date because white cards can be issued prior to execution.
                     if self.instance.start_date and issued:
                         if issued.date() > self.instance.end_date:
                             form.add_error(
                                 "issued",
                                 ValidationError(
-                                    _("Your selected date is after the project end date"),
+                                    _("Your selected date is after the project end date."),
                                     code="invalid_datetime",
                                 ),
                             )
+
+
+class BaseProjectContactInlineFormSet(BaseInlineFormSet):
+    """
+    BaseInlineFormset template for :model:`rolodex.ProjectContact` that adds validation
+    for this model.
+    """
+
+    def clean(self):
+        super().clean()
+        if any(self.errors):
+            return
+
+        contacts = set()
+        primary_set = False
+        for form in self.forms:
+            if not form.cleaned_data or form.cleaned_data["DELETE"]:
+                continue
+            name = form.cleaned_data["name"]
+            primary = form.cleaned_data["primary"]
+
+            # Check that the same person has not been added more than once
+            if name:
+                if name in contacts:
+                    form.add_error(
+                        "name",
+                        ValidationError(
+                            _("This person is already assigned as a contact."),
+                            code="duplicate",
+                        ),
+                    )
+                contacts.add(name)
+
+            if primary:
+                if primary_set:
+                    form.add_error(
+                        "primary",
+                        ValidationError(
+                            _("You can only set one primary contact."),
+                            code="duplicate",
+                        ),
+                    )
+                primary_set = True
 
 
 # Forms used with the inline formsets
@@ -406,11 +460,14 @@ class ProjectAssignmentForm(forms.ModelForm):
         exclude = ()
         widgets = {
             "start_date": forms.DateInput(
-                format=("%Y-%m-%d"),
+                format="%Y-%m-%d",
             ),
             "end_date": forms.DateInput(
-                format=("%Y-%m-%d"),
+                format="%Y-%m-%d",
             ),
+        }
+        field_classes = {
+            "note": JinjaRichTextField,
         }
 
     def __init__(self, *args, **kwargs):
@@ -467,7 +524,7 @@ class ProjectAssignmentForm(forms.ModelForm):
                                 StrictButton(
                                     "Copy",
                                     onclick="copyStartDate($(this).closest('div').find('input'))",
-                                    css_class="btn btn-secondary"
+                                    css_class="btn btn-secondary",
                                 ),
                             ),
                             css_class="form-group col-md-6 mb-0",
@@ -478,7 +535,7 @@ class ProjectAssignmentForm(forms.ModelForm):
                                 StrictButton(
                                     "Copy",
                                     onclick="copyEndDate($(this).closest('div').find('input'))",
-                                    css_class="btn btn-secondary"
+                                    css_class="btn btn-secondary",
                                 ),
                             ),
                             css_class="form-group col-md-6 mb-0",
@@ -526,8 +583,11 @@ class ProjectObjectiveForm(forms.ModelForm):
         )
         widgets = {
             "deadline": forms.DateInput(
-                format=("%Y-%m-%d"),
+                format="%Y-%m-%d",
             ),
+        }
+        field_classes = {
+            "description": JinjaRichTextField,
         }
 
     def __init__(self, *args, **kwargs):
@@ -578,8 +638,8 @@ class ProjectObjectiveForm(forms.ModelForm):
                                 "deadline",
                                 StrictButton(
                                     "Copy",
-                                    onclick="copyEndDate($(this).closest('div').find('input'))",
-                                    css_class="btn btn-secondary"
+                                    onclick="setObjectiveDeadline($(this).closest('div').find('input'))",
+                                    css_class="btn btn-secondary",
                                 ),
                             ),
                             css_class="col-4",
@@ -634,6 +694,9 @@ class ProjectScopeForm(forms.ModelForm):
     class Meta:
         model = ProjectScope
         fields = ("name", "scope", "description", "disallowed", "requires_caution")
+        field_classes = {
+            "description": JinjaRichTextField,
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -687,7 +750,7 @@ class ProjectScopeForm(forms.ModelForm):
                                 onclick="formatScope($(this).closest('div').next('div').find('textarea'))",
                                 data_toggle="tooltip",
                                 title="Split a comma-delimited scope list to newlines",
-                                css_class="btn btn-outline-secondary col-6"
+                                css_class="btn btn-outline-secondary col-6",
                             ),
                         ),
                     ),
@@ -729,6 +792,9 @@ class ProjectTargetForm(forms.ModelForm):
             "hostname",
             "note",
         )
+        field_classes = {
+            "note": JinjaRichTextField,
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -805,6 +871,9 @@ class WhiteCardForm(forms.ModelForm):
     class Meta:
         model = WhiteCard
         exclude = ("project",)
+        field_classes = {
+            "description": JinjaRichTextField,
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -859,7 +928,7 @@ class WhiteCardForm(forms.ModelForm):
                                 StrictButton(
                                     "Now",
                                     onclick="setNow($(this).closest('div').find('input'))",
-                                    css_class="btn btn-secondary"
+                                    css_class="btn btn-secondary",
                                 ),
                             ),
                             css_class="col-md-6",
@@ -871,6 +940,99 @@ class WhiteCardForm(forms.ModelForm):
                             Button(
                                 "formset-del-button",
                                 "Delete White Card",
+                                css_class="btn-outline-danger formset-del-button col-5",
+                            ),
+                            css_class="form-group col-6 offset-3",
+                        ),
+                        Column(
+                            Field(
+                                "DELETE", style="display: none;", visibility="hidden", template="delete_checkbox.html"
+                            ),
+                            css_class="form-group col-3 text-center",
+                        ),
+                    ),
+                    css_class="formset",
+                ),
+                css_class="formset-container",
+            )
+        )
+
+
+class ProjectContactForm(forms.ModelForm):
+    """
+    Save an individual :model:`rolodex.ProjectContact` associated with an individual
+    :model:`rolodex.Project`.
+    """
+
+    class Meta:
+        model = ProjectContact
+        exclude = ("project",)
+        field_classes = {
+            "email": forms.EmailField,
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        general_config = GeneralConfiguration.get_solo()
+        for field in self.fields:
+            self.fields[field].widget.attrs["autocomplete"] = "off"
+        self.fields["name"].widget.attrs["placeholder"] = "Janine Melnitz"
+        self.fields["name"].label = "Full Name"
+        self.fields["email"].widget.attrs["placeholder"] = "info@getghostwriter.io"
+        self.fields["email"].label = "Email Address"
+        self.fields["job_title"].widget.attrs["placeholder"] = "COO"
+        self.fields["phone"].widget.attrs["placeholder"] = "(212) 897-1964"
+        self.fields["phone"].label = "Phone Number"
+        self.fields["note"].widget.attrs["placeholder"] = "Janine is our main contact for assessment work and ..."
+        self.fields["timezone"].initial = general_config.default_timezone
+        self.helper = FormHelper()
+        # Disable the <form> tags because this will be part of an instance of `ProjectForm()`
+        self.helper.form_tag = False
+        # Disable CSRF so `csrfmiddlewaretoken` is not rendered multiple times
+        self.helper.disable_csrf = True
+        # Layout the form for Bootstrap
+        self.helper.layout = Layout(
+            # Wrap form in a div so Django renders form instances in their own element
+            Div(
+                # These Bootstrap alerts begin hidden and function as undo buttons for deleted forms
+                Alert(
+                    content=(
+                        """
+                        <strong>Contact Deleted!</strong>
+                        Deletion will be permanent once the form is submitted. Click this alert to undo.
+                        """
+                    ),
+                    css_class="alert alert-danger show formset-undo-button",
+                    style="display:none; cursor:pointer;",
+                    template="alert.html",
+                    block=False,
+                    dismiss=False,
+                ),
+                Div(
+                    HTML(
+                        """
+                        <h6>Contact #<span class="counter">{{ forloop.counter }}</span></h6>
+                        <hr>
+                        """
+                    ),
+                    Row(
+                        Column("name", css_class="form-group col-md-6 mb-0"),
+                        Column("job_title", css_class="form-group col-md-6 mb-0"),
+                        css_class="form-row",
+                    ),
+                    Row(
+                        Column("email", css_class="form-group col-md-4 mb-0"),
+                        Column("phone", css_class="form-group col-md-4 mb-0"),
+                        Column("timezone", css_class="form-group col-md-4 mb-0"),
+                        css_class="form-row",
+                    ),
+                    SwitchToggle("primary", onchange="cbChange(this)", css_class="js-cb-toggle"),
+                    "note",
+                    Row(
+                        Column(
+                            Button(
+                                "formset-del-button",
+                                "Delete Contact",
                                 css_class="btn-outline-danger formset-del-button col-4",
                             ),
                             css_class="form-group col-6 offset-3",
@@ -936,6 +1098,15 @@ WhiteCardFormSet = inlineformset_factory(
     can_delete=True,
 )
 
+ProjectContactFormSet = inlineformset_factory(
+    Project,
+    ProjectContact,
+    form=ProjectContactForm,
+    formset=BaseProjectContactInlineFormSet,
+    extra=EXTRAS,
+    can_delete=True,
+)
+
 
 class ProjectForm(forms.ModelForm):
     """
@@ -953,14 +1124,17 @@ class ProjectForm(forms.ModelForm):
 
     class Meta:
         model = Project
-        exclude = ("operator", "complete")
+        exclude = ("operator", "complete", "extra_fields")
         widgets = {
             "start_date": forms.DateInput(
-                format=("%Y-%m-%d"),
+                format="%Y-%m-%d",
             ),
             "end_date": forms.DateInput(
-                format=("%Y-%m-%d"),
+                format="%Y-%m-%d",
             ),
+        }
+        field_classes = {
+            "note": JinjaRichTextField,
         }
 
     def __init__(self, *args, **kwargs):
@@ -979,6 +1153,7 @@ class ProjectForm(forms.ModelForm):
         self.fields["project_type"].label = "Project Type"
         self.fields["client"].empty_label = "-- Select a Client --"
         self.fields["project_type"].empty_label = "-- Select a Project Type --"
+
         # Design form layout with Crispy FormHelper
         self.helper = FormHelper()
         # Turn on <form> tags for this parent form
@@ -1016,8 +1191,8 @@ class ProjectForm(forms.ModelForm):
                         css_class="form-row",
                     ),
                     Row(
-                        Column("start_time", css_class="form-group col-md-4 mb-0"),
-                        Column("end_time", css_class="form-group col-md-4 mb-0"),
+                        Column(Field("start_time", step=1), css_class="form-group col-md-4 mb-0"),
+                        Column(Field("end_time", step=1), css_class="form-group col-md-4 mb-0"),
                         Column("timezone", css_class="form-group col-md-4 mb-0"),
                         css_class="form-row",
                     ),
@@ -1043,50 +1218,6 @@ class ProjectForm(forms.ModelForm):
                     link_css_class="assignment-icon",
                     css_id="assignments",
                 ),
-                CustomTab(
-                    "Objectives",
-                    Formset("objectives", object_context_name="Objective"),
-                    Button(
-                        "add-objective",
-                        "Add Objective",
-                        css_class="btn-block btn-secondary formset-add-obj mb-2 offset-4 col-4",
-                    ),
-                    link_css_class="objective-icon",
-                    css_id="objectives",
-                ),
-                CustomTab(
-                    "Scope Lists",
-                    Formset("scopes", object_context_name="Scope"),
-                    Button(
-                        "add-scope",
-                        "Add Scope List",
-                        css_class="btn-block btn-secondary formset-add-scope mb-2 offset-4 col-4",
-                    ),
-                    link_css_class="tab-icon list-icon",
-                    css_id="scopes",
-                ),
-                CustomTab(
-                    "Targets",
-                    Formset("targets", object_context_name="Target"),
-                    Button(
-                        "add-target",
-                        "Add Target",
-                        css_class="btn-block btn-secondary formset-add-target mb-2 offset-4 col-4",
-                    ),
-                    link_css_class="tab-icon list-icon",
-                    css_id="targets",
-                ),
-                CustomTab(
-                    "White Cards",
-                    Formset("whitecards", object_context_name="White Card"),
-                    Button(
-                        "add-whitecard",
-                        "Add White Card",
-                        css_class="btn-block btn-secondary formset-add-card mb-2 offset-4 col-4",
-                    ),
-                    link_css_class="tab-icon whitecard-icon",
-                    css_id="whitecards",
-                ),
                 template="tab.html",
                 css_class="nav-justified",
             ),
@@ -1107,7 +1238,7 @@ class ProjectForm(forms.ModelForm):
         # Check if ``end_date`` comes before the ``start_date``
         if end_date < start_date:
             raise ValidationError(
-                _("The provided end date comes before the start date"),
+                _("The provided end date comes before the start date."),
                 code="invalid_date",
             )
         return end_date
@@ -1117,7 +1248,7 @@ class ProjectForm(forms.ModelForm):
         if slack_channel:
             if not slack_channel.startswith("#") and not slack_channel.startswith("@"):
                 raise ValidationError(
-                    _("Slack channels should start with # or @ – check this channel name"),
+                    _("Slack channels should start with # or @."),
                     code="invalid_channel",
                 )
         return slack_channel
@@ -1156,7 +1287,7 @@ class ProjectNoteForm(forms.ModelForm):
         # Check if note is empty
         if not note:
             raise ValidationError(
-                _("You must provide some content for the note"),
+                _("You must provide some content for the note."),
                 code="required",
             )
         return note
@@ -1174,6 +1305,9 @@ class DeconflictionForm(forms.ModelForm):
             "created_at",
             "project",
         )
+        field_classes = {
+            "description": JinjaRichTextField,
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1253,7 +1387,7 @@ class DeconflictionForm(forms.ModelForm):
                 self.add_error(
                     "response_timestamp",
                     ValidationError(
-                        _("The response timestamp cannot be before the report timestamp"),
+                        _("The response timestamp cannot be before the report timestamp."),
                         code="invalid_datetime",
                     ),
                 )
@@ -1263,7 +1397,119 @@ class DeconflictionForm(forms.ModelForm):
                 self.add_error(
                     "report_timestamp",
                     ValidationError(
-                        _("The report timestamp cannot be before the alert timestamp"),
+                        _("The report timestamp cannot be before the alert timestamp."),
                         code="invalid_datetime",
                     ),
                 )
+
+
+class ProjectComponentForm(forms.ModelForm):
+    """
+    Save an individual :model:`rolodex.Project` with instances of
+    :model:`rolodex.ProjectAssignment` and :model:`rolodex.ProjectObjective` associated
+    with an individual :model:`rolodex.Client`.
+    """
+
+    extra_fields = ExtraFieldsField(Project._meta.label)
+
+    class Meta:
+        model = Project
+        fields = ("id", "extra_fields")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields:
+            self.fields[field].widget.attrs["autocomplete"] = "off"
+        self.fields["extra_fields"].label = ""
+
+        has_extra_fields = bool(self.fields["extra_fields"].specs)
+
+        tabs = [
+            CustomTab(
+                "Contacts",
+                Formset("contacts", object_context_name="Contact"),
+                Button(
+                    "add-contact",
+                    "Add Contact",
+                    css_class="btn-block btn-secondary formset-add-contact mb-2 offset-4 col-4",
+                ),
+                link_css_class="poc-icon",
+                css_id="contacts",
+            ),
+            CustomTab(
+                "White Cards",
+                Formset("whitecards", object_context_name="White Card"),
+                Button(
+                    "add-whitecard",
+                    "Add White Card",
+                    css_class="btn-block btn-secondary formset-add-card mb-2 offset-4 col-4",
+                ),
+                link_css_class="tab-icon whitecard-icon",
+                css_id="whitecards",
+            ),
+            CustomTab(
+                "Scope Lists",
+                Formset("scopes", object_context_name="Scope"),
+                Button(
+                    "add-scope",
+                    "Add Scope List",
+                    css_class="btn-block btn-secondary formset-add-scope mb-2 offset-4 col-4",
+                ),
+                link_css_class="tab-icon list-icon",
+                css_id="scopes",
+            ),
+            CustomTab(
+                "Objectives",
+                Formset("objectives", object_context_name="Objective"),
+                Button(
+                    "add-objective",
+                    "Add Objective",
+                    css_class="btn-block btn-secondary formset-add-obj mb-2 offset-4 col-4",
+                ),
+                link_css_class="objective-icon",
+                css_id="objectives",
+            ),
+            CustomTab(
+                "Targets",
+                Formset("targets", object_context_name="Target"),
+                Button(
+                    "add-target",
+                    "Add Target",
+                    css_class="btn-block btn-secondary formset-add-target mb-2 offset-4 col-4",
+                ),
+                link_css_class="tab-icon list-icon",
+                css_id="targets",
+            ),
+        ]
+
+        if has_extra_fields:
+            tabs.append(
+                CustomTab(
+                    "Extra Fields",
+                    "extra_fields",
+                    link_css_class="tab-icon custom-field-icon",
+                    css_id="extra-fields",
+                )
+            )
+
+        # Design form layout with Crispy FormHelper
+        self.helper = FormHelper()
+        # Turn on <form> tags for this parent form
+        self.helper.form_tag = True
+        self.helper.form_method = "post"
+        self.helper.layout = Layout(
+            TabHolder(
+                *tabs,
+                template="tab.html",
+                css_class="nav-justified",
+            ),
+            ButtonHolder(
+                Submit("submit", "Submit", css_class="btn btn-primary col-md-4"),
+                HTML(
+                    """
+                    <button onclick="window.location.href='{{ cancel_link }}'"
+                    class="btn btn-outline-secondary col-md-4" type="button">Cancel</button>
+                    """
+                ),
+            ),
+        )

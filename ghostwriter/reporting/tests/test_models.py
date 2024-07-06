@@ -6,19 +6,20 @@ import os
 import factory
 
 # Django Imports
-from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import transaction
 from django.test import TestCase
 
 # Ghostwriter Libraries
 from ghostwriter.factories import (
     ArchiveFactory,
+    ClientFactory,
     DocTypeFactory,
-    EvidenceFactory,
+    EvidenceOnFindingFactory,
     FindingFactory,
     FindingNoteFactory,
     FindingTypeFactory,
     LocalFindingNoteFactory,
+    ProjectFactory,
     ReportDocxTemplateFactory,
     ReportFactory,
     ReportFindingLinkFactory,
@@ -134,6 +135,12 @@ class SeverityModelTests(TestCase):
         self.assertEqual(medium.color, "000FFF")
         self.assertEqual(medium.weight, 3)
 
+        low = SeverityFactory(severity="Low", weight=50, color="000FFF")
+        self.assertEqual(low.weight, 4)
+
+        info = SeverityFactory(severity="Info", weight=-1, color="000FFF")
+        self.assertEqual(info.weight, 5)
+
         critical.weight = 2
         critical.save()
 
@@ -196,7 +203,7 @@ class DocTypeModelTests(TestCase):
 
     def test_crud_doc_type(self):
         # Create
-        doc_type = DocTypeFactory(doc_type="docx")
+        doc_type = DocTypeFactory(doc_type="docx", extension="docx", name="docx")
 
         # Read
         self.assertEqual(doc_type.doc_type, "docx")
@@ -323,6 +330,120 @@ class ReportModelTests(TestCase):
         except:
             self.fail("Report.get_absolute_url() raised an exception")
 
+    def test_clear_incorrect_template_defaults_unchanged(self):
+        docx_template = ReportDocxTemplateFactory()
+        pptx_template = ReportPptxTemplateFactory()
+        report = ReportFactory(
+            title="New report",
+            docx_template=docx_template,
+            pptx_template=pptx_template,
+        )
+
+        # Don't change anything. Clearing should do nothing.
+
+        self.Report.clear_incorrect_template_defaults(docx_template)
+        new_report = self.Report.objects.first()
+        self.assertEqual(new_report.id, report.id)
+        self.assertIsNotNone(new_report.docx_template)
+        self.assertEqual(new_report.docx_template.id, docx_template.id)
+        self.assertIsNotNone(new_report.pptx_template)
+        self.assertEqual(new_report.pptx_template.id, pptx_template.id)
+
+        self.Report.clear_incorrect_template_defaults(pptx_template)
+        new_report = self.Report.objects.first()
+        self.assertEqual(new_report.id, report.id)
+        self.assertIsNotNone(new_report.docx_template)
+        self.assertEqual(new_report.docx_template.id, docx_template.id)
+        self.assertIsNotNone(new_report.pptx_template)
+        self.assertEqual(new_report.pptx_template.id, pptx_template.id)
+
+    def test_clear_incorrect_template_defaults_docx_to_pptx(self):
+        docx_template = ReportDocxTemplateFactory()
+        report = ReportFactory(
+            title="New report",
+            docx_template=docx_template,
+        )
+
+        docx_template.doc_type = DocTypeFactory(doc_type="pptx", extension="pptx", name="pptx")
+        docx_template.save()
+
+        self.Report.clear_incorrect_template_defaults(docx_template)
+        new_report = self.Report.objects.first()
+        self.assertEqual(new_report.id, report.id)
+        self.assertIsNone(new_report.docx_template)
+
+    def test_clear_incorrect_template_defaults_pptx_to_docx(self):
+        pptx_template = ReportPptxTemplateFactory()
+        report = ReportFactory(
+            title="New report",
+            pptx_template=pptx_template,
+        )
+
+        pptx_template.doc_type = DocTypeFactory(doc_type="docx", extension="docx", name="docx")
+        pptx_template.save()
+
+        self.Report.clear_incorrect_template_defaults(pptx_template)
+        new_report = self.Report.objects.first()
+        self.assertEqual(new_report.id, report.id)
+        self.assertIsNone(new_report.pptx_template)
+
+    def test_clear_incorrect_template_defaults_client_change_clear(self):
+        client = ClientFactory()
+        pptx_template = ReportDocxTemplateFactory()
+        report = ReportFactory(
+            title="New report",
+            pptx_template=pptx_template,
+        )
+
+        pptx_template.client = client
+        pptx_template.save()
+
+        self.Report.clear_incorrect_template_defaults(pptx_template)
+        new_report = self.Report.objects.first()
+        self.assertEqual(new_report.id, report.id)
+        self.assertIsNone(new_report.pptx_template)
+
+    def test_clear_incorrect_template_defaults_client_change_set_same(self):
+        client = ClientFactory()
+        project = ProjectFactory(client=client)
+        pptx_template = ReportPptxTemplateFactory()
+        report = ReportFactory(
+            title="New report",
+            pptx_template=pptx_template,
+            project=project,
+        )
+
+        self.assertEqual(report.project.client, client)
+
+        pptx_template.client = client
+        pptx_template.save()
+
+        self.Report.clear_incorrect_template_defaults(pptx_template)
+        new_report = self.Report.objects.first()
+        self.assertEqual(new_report.project.client, client)
+        self.assertIsNotNone(new_report.pptx_template)
+        self.assertEqual(new_report.pptx_template.id, pptx_template.id)
+
+    def test_clear_incorrect_template_defaults_client_change_set_different(self):
+        client = ClientFactory()
+        project = ProjectFactory(client=client)
+        pptx_template = ReportPptxTemplateFactory()
+        report = ReportFactory(
+            title="New report",
+            pptx_template=pptx_template,
+            project=project,
+        )
+
+        self.assertEqual(report.project.client, client)
+
+        pptx_template.client = ClientFactory()
+        pptx_template.save()
+
+        self.Report.clear_incorrect_template_defaults(pptx_template)
+        new_report = self.Report.objects.first()
+        self.assertEqual(new_report.project.client, client)
+        self.assertIsNone(new_report.pptx_template)
+
 
 class ReportFindingLinkModelTests(TestCase):
     """Collection of tests for :model:`reporting.ReportFindingLink`."""
@@ -357,176 +478,17 @@ class ReportFindingLinkModelTests(TestCase):
         finding.delete()
         assert not self.ReportFindingLink.objects.all().exists()
 
-    def test_model_cleaning_position(self):
-        report = ReportFactory()
-        num_of_findings = 10
-        findings = []
-        for finding_id in range(num_of_findings):
-            findings.append(ReportFindingLinkFactory(report=report, severity=self.critical_severity))
-        # New position values
-        first_pos = 1
-        second_pos = 2
-        # Bump first finding from ``1`` to new value
-        findings[0].position = second_pos
-        findings[0].save()
-
-        cleaned_findings = []
-        for f in findings:
-            f.refresh_from_db()
-            cleaned_findings.append(f)
-        # Assert first finding is now in second position
-        self.assertEqual(cleaned_findings[0].position, second_pos)
-        # Assert second finding has moved into first position
-        self.assertEqual(cleaned_findings[1].position, first_pos)
-
-        # Test triggering ``clean()`` method when parent ``Report`` is deleted
-        report.delete()
-
-    def test_model_cleaning_severity_change(self):
-        report = ReportFactory()
-        num_of_findings = 10
-        findings = []
-        for finding_id in range(num_of_findings):
-            findings.append(ReportFindingLinkFactory(report=report, severity=self.critical_severity))
-        # Bump the first half of the findings to the new severity in reverse order
-        for f in reversed(range(5)):
-            findings[f].severity = self.high_severity
-            findings[f].save()
-
-        cleaned_findings = []
-        for f in findings:
-            f.refresh_from_db()
-            cleaned_findings.append(f)
-        # Assert severity was properly updated
-        self.assertEqual(cleaned_findings[0].severity, self.high_severity)
-        # Assert the positions were set properly
-        self.assertEqual(cleaned_findings[5].position, 1)
-        self.assertEqual(cleaned_findings[9].position, 5)
-        self.assertEqual(cleaned_findings[0].position, 1)
-        self.assertEqual(cleaned_findings[4].position, 5)
-
-    def test_model_cleaning_severity_and_position_changes(self):
-        report = ReportFactory()
-        num_of_findings = 5
-        findings = []
-        for finding_id in range(num_of_findings):
-            findings.append(
-                ReportFindingLinkFactory(report=report, severity=self.critical_severity),
-            )
-
-        for finding_id in range(num_of_findings):
-            findings.append(
-                ReportFindingLinkFactory(report=report, severity=self.high_severity),
-            )
-
-        # Bounce findings around to shuffle positions several times
-        findings[8].severity = self.critical_severity
-        findings[8].position = 2
-        findings[8].save()
-
-        findings[5].severity = self.critical_severity
-        findings[5].position = 1
-        findings[5].save()
-
-        findings[3].severity = self.high_severity
-        findings[3].position = 2
-        findings[3].save()
-
-        cleaned_findings = []
-        for f in findings:
-            f.refresh_from_db()
-            cleaned_findings.append(f)
-
-        # Assert ``severity`` and ``position`` changes committed correctly
-        self.assertEqual(cleaned_findings[8].severity, self.critical_severity)
-        self.assertEqual(cleaned_findings[8].position, 3)
-        self.assertEqual(cleaned_findings[5].severity, self.critical_severity)
-        self.assertEqual(cleaned_findings[5].position, 1)
-        self.assertEqual(cleaned_findings[3].severity, self.high_severity)
-        self.assertEqual(cleaned_findings[3].position, 2)
-        # Assert the ``position`` values updated properly for "Critical"
-        self.assertEqual(cleaned_findings[5].position, 1)
-        self.assertEqual(cleaned_findings[0].position, 2)
-        self.assertEqual(cleaned_findings[8].position, 3)
-        self.assertEqual(cleaned_findings[1].position, 4)
-        self.assertEqual(cleaned_findings[2].position, 5)
-        self.assertEqual(cleaned_findings[4].position, 6)
-        # Assert the ``position`` values updated properly for "High"
-        self.assertEqual(cleaned_findings[5].position, 1)
-        self.assertEqual(cleaned_findings[3].position, 2)
-        self.assertEqual(cleaned_findings[7].position, 3)
-        self.assertEqual(cleaned_findings[9].position, 4)
-
-    def test_position_set_to_zero(self):
-        report = ReportFactory()
-        finding = ReportFindingLinkFactory(report=report, severity=self.critical_severity)
-        finding.position = -10
-        finding.save()
-        finding.refresh_from_db()
-        # Assert the other ``position`` values updated properly
-        self.assertEqual(finding.position, 1)
-
-    def test_position_set_higher_than_count(self):
-        report = ReportFactory()
-        num_of_findings = 10
-        findings = []
-        for finding_id in range(num_of_findings):
-            findings.append(ReportFindingLinkFactory(report=report, severity=self.critical_severity))
-        findings[0].position = 100
-        findings[0].save()
-        findings[0].refresh_from_db()
-        # Assert the other ``position`` values updated properly
-        self.assertEqual(findings[0].position, num_of_findings)
-
-    def test_position_change_on_delete(self):
-        report = ReportFactory()
-        num_of_findings = 5
-        findings = []
-        for finding_id in range(num_of_findings):
-            findings.append(
-                ReportFindingLinkFactory(report=report, severity=self.critical_severity),
-            )
-        for finding_id in range(num_of_findings):
-            findings.append(
-                ReportFindingLinkFactory(report=report, severity=self.high_severity),
-            )
-
-        # Delete several findings to create gaps in the severity groups
-        # Need to use atomic because ``TestCase`` and a ``post_delete`` Signal
-        with transaction.atomic():
-            findings[3].delete()
-            findings[5].delete()
-            findings[8].delete()
-
-        cleaned_findings = []
-        for f in findings:
-            try:
-                f.refresh_from_db()
-                cleaned_findings.append(f)
-            except self.ReportFindingLink.DoesNotExist:
-                pass
-
-        # Assert the ``position`` values updated properly for "Critical"
-        self.assertEqual(cleaned_findings[0].position, 1)
-        self.assertEqual(cleaned_findings[1].position, 2)
-        self.assertEqual(cleaned_findings[2].position, 3)
-        self.assertEqual(cleaned_findings[3].position, 4)
-        # Assert the ``position`` values updated properly for "High"
-        self.assertEqual(cleaned_findings[4].position, 1)
-        self.assertEqual(cleaned_findings[5].position, 2)
-        self.assertEqual(cleaned_findings[6].position, 3)
-
 
 class EvidenceModelTests(TestCase):
     """Collection of tests for :model:`reporting.Evidence`."""
 
     @classmethod
     def setUpTestData(cls):
-        cls.Evidence = EvidenceFactory._meta.model
+        cls.Evidence = EvidenceOnFindingFactory._meta.model
 
     def test_crud_evidence(self):
         # Create
-        evidence = EvidenceFactory(friendly_name="Test Evidence")
+        evidence = EvidenceOnFindingFactory(friendly_name="Test Evidence")
 
         # Read
         self.assertEqual(evidence.friendly_name, "Test Evidence")
@@ -544,34 +506,41 @@ class EvidenceModelTests(TestCase):
         # Delete
         evidence.delete()
         assert not self.Evidence.objects.all().exists()
-        assert not os.path.exists(evidence.document.path)
 
     def test_get_absolute_url(self):
-        evidence = EvidenceFactory()
+        evidence = EvidenceOnFindingFactory()
         try:
             evidence.get_absolute_url()
         except:
             self.fail("Evidence.get_absolute_url() raised an exception")
+        evidence.delete()
 
     def test_file_extension_validator(self):
-        evidence = EvidenceFactory(document=factory.django.FileField(filename="evidence.PnG", data=b"lorem ipsum"))
-        self.assertEqual(evidence.filename, "evidence.PnG")
+        evidence = EvidenceOnFindingFactory(
+            document=factory.django.FileField(filename="ext_test.PnG", data=b"lorem ipsum")
+        )
+        self.assertEqual(evidence.filename, "ext_test.PnG")
+        evidence.delete()
 
     def test_prop_filename(self):
-        evidence = EvidenceFactory()
+        evidence = EvidenceOnFindingFactory()
         try:
             evidence.filename
         except Exception:
             self.fail("Evidence model `filename` property failed unexpectedly!")
 
-    def test_delete_old_evidence_on_update_signal(self):
-        evidence = EvidenceFactory(document=factory.django.FileField(filename="evidence.txt", data=b"lorem ipsum"))
-        evidence.document = SimpleUploadedFile("new_evidence.txt", b"lorem ipsum")
-        evidence.save()
-
-        self.assertTrue(evidence._current_evidence.path not in evidence.document.path)
-        self.assertFalse(os.path.exists(evidence._current_evidence.path))
-        self.assertTrue(os.path.exists(evidence.document.path))
+    def test_long_filename(self):
+        name = (
+            "In-mi-nisi-dignissim-nec-eleifend-sed-porta-eu-lacus-Sed-nunc-nisl-tristique-at-enim-bibendum-rutrum-sodales-ligula-Aliquam-quis-pharetra-sem-Morbi-nec-vestibulum-nunc-Nullam-urna-tortor-venenatis-et-nisi-ac-"
+            + "fringilla-sodales-sed.txt"
+        )
+        evidence = EvidenceOnFindingFactory(document=factory.django.FileField(filename=name, data=b"lorem ipsum"))
+        self.assertEqual(evidence.filename, name)
+        try:
+            evidence.get_absolute_url()
+        except:
+            self.fail("Evidence.get_absolute_url() raised an exception")
+        evidence.delete()
 
 
 class FindingNoteModelTests(TestCase):

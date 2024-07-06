@@ -6,15 +6,20 @@ from django.test import TestCase
 
 # Ghostwriter Libraries
 from ghostwriter.factories import (
-    EvidenceFactory,
+    EvidenceOnFindingFactory,
+    EvidenceOnReportFactory,
     FindingFactory,
     FindingNoteFactory,
     LocalFindingNoteFactory,
+    ObservationFactory,
+    ProjectAssignmentFactory,
     ProjectFactory,
     ReportFactory,
     ReportFindingLinkFactory,
+    ReportObservationLinkFactory,
     ReportTemplateFactory,
     SeverityFactory,
+    UserFactory,
 )
 from ghostwriter.modules.model_utils import to_dict
 from ghostwriter.reporting.forms import (
@@ -22,14 +27,18 @@ from ghostwriter.reporting.forms import (
     FindingForm,
     FindingNoteForm,
     LocalFindingNoteForm,
+    ObservationForm,
     ReportFindingLinkUpdateForm,
     ReportForm,
+    ReportObservationLinkUpdateForm,
     ReportTemplateForm,
     SelectReportTemplateForm,
     SeverityForm,
 )
 
 logging.disable(logging.CRITICAL)
+
+PASSWORD = "SuperNaturalReporting!"
 
 
 class FindingFormTests(TestCase):
@@ -90,6 +99,25 @@ class FindingFormTests(TestCase):
         self.assertEqual(errors[0].code, "unique")
 
 
+class ObservationFormTest(TestCase):
+    """Collection of tests for :form:`reporting.ObservationForm`."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.observation = ObservationFactory()
+
+    def test_valid_data(self):
+        self.observation.title = "New Title"
+        form = ObservationForm(data=self.observation.__dict__)
+        self.assertTrue(form.is_valid())
+
+    def test_duplicate_title(self):
+        form = ObservationForm(data=self.observation.__dict__)
+        errors = form["title"].errors.as_data()
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].code, "unique")
+
+
 class ReportFormTests(TestCase):
     """Collection of tests for :form:`reporting.ReportForm`."""
 
@@ -98,12 +126,14 @@ class ReportFormTests(TestCase):
         cls.project = ProjectFactory()
         cls.report = ReportFactory(project=cls.project)
         cls.report_dict = cls.report.__dict__
+        cls.user = UserFactory(password=PASSWORD)
 
     def setUp(self):
         pass
 
     def form_data(
         self,
+        user=None,
         title=None,
         complete=None,
         archived=None,
@@ -115,6 +145,7 @@ class ReportFormTests(TestCase):
         **kwargs,
     ):
         return ReportForm(
+            user=user,
             data={
                 "title": title,
                 "complete": complete,
@@ -129,15 +160,19 @@ class ReportFormTests(TestCase):
 
     def test_valid_data(self):
         report = self.report_dict.copy()
+        form = self.form_data(user=self.user, **report)
+        self.assertFalse(form.is_valid())
+        self.assertTrue(form.errors.as_data()["project"][0].code == "invalid_choice")
 
-        form = self.form_data(**report)
+        ProjectAssignmentFactory(operator=self.user, project=self.project)
+        form = self.form_data(user=self.user, **report)
         self.assertTrue(form.is_valid())
 
     def test_invalid_docx_template(self):
         report = self.report_dict.copy()
         report["docx_template_id"] = report["pptx_template_id"]
 
-        form = self.form_data(**report)
+        form = self.form_data(user=self.user, **report)
         errors = form["docx_template"].errors.as_data()
         self.assertEqual(len(errors), 1)
         self.assertEqual(errors[0].code, "invalid_choice")
@@ -146,7 +181,7 @@ class ReportFormTests(TestCase):
         report = self.report_dict.copy()
         report["pptx_template_id"] = report["docx_template_id"]
 
-        form = self.form_data(**report)
+        form = self.form_data(user=self.user, **report)
         errors = form["pptx_template"].errors.as_data()
         self.assertEqual(len(errors), 1)
         self.assertEqual(errors[0].code, "invalid_choice")
@@ -159,6 +194,7 @@ class ReportFindingLinkUpdateFormTests(TestCase):
     def setUpTestData(cls):
         cls.finding = ReportFindingLinkFactory()
         cls.blank_finding = ReportFindingLinkFactory(added_as_blank=True)
+        cls.complete_finding = ReportFindingLinkFactory(complete=True)
 
     def setUp(self):
         pass
@@ -184,6 +220,7 @@ class ReportFindingLinkUpdateFormTests(TestCase):
         network_detection_techniques=None,
         references=None,
         finding_guidance=None,
+        complete=None,
         **kwargs,
     ):
         return ReportFindingLinkUpdateForm(
@@ -203,6 +240,7 @@ class ReportFindingLinkUpdateFormTests(TestCase):
                 "network_detection_techniques": network_detection_techniques,
                 "references": references,
                 "finding_guidance": finding_guidance,
+                "complete": complete,
             },
             instance=instance,
         )
@@ -222,16 +260,76 @@ class ReportFindingLinkUpdateFormTests(TestCase):
         form.save()
         self.assertTrue(self.blank_finding.added_as_blank)
 
+    def test_complete_field(self):
+        form = self.form_data(instance=self.complete_finding, **self.complete_finding.__dict__)
+        self.assertTrue(form.is_valid())
+        form.save()
+        self.assertTrue(self.complete_finding.complete)
 
-class EvidenceFormTests(TestCase):
-    """Collection of tests for :form:`reporting.EvidenceForm`."""
+
+class ReportObservationLinkUpdateFormTests(TestCase):
+    """Collection of tests for :form:`reporting.ReportObservationLinkForm`."""
 
     @classmethod
     def setUpTestData(cls):
-        cls.Evidence = EvidenceFactory._meta.model
-        cls.evidence = EvidenceFactory()
+        cls.observation = ReportObservationLinkFactory()
+        cls.blank_observation = ReportObservationLinkFactory(added_as_blank=True)
+
+    def test_valid_data(self):
+        data = self.observation.__dict__.copy()
+        data["instance"] = self.observation
+        form = ReportObservationLinkUpdateForm(data=data)
+        self.assertTrue(form.is_valid())
+
+    def test_blank_assigned_to(self):
+        self.observation.assigned_to = None
+
+        data = self.observation.__dict__.copy()
+        data["instance"] = self.observation
+        form = ReportObservationLinkUpdateForm(data)
+        self.assertTrue(form.is_valid())
+
+    def test_added_as_blank_field(self):
+        data = self.observation.__dict__.copy()
+        data["instance"] = self.blank_observation
+        form = ReportObservationLinkUpdateForm(data=data)
+        self.assertTrue(form.is_valid())
+        form.save()
+        self.assertTrue(self.blank_observation.added_as_blank)
+
+
+class BaseEvidenceFormTests:
+    """Collection of tests for :form:`reporting.EvidenceForm`."""
+
+    @classmethod
+    def factory(cls):
+        raise NotImplementedError()
+
+    @classmethod
+    def querySet(cls):
+        raise NotImplementedError()
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.Factory = cls.factory()
+        cls.Evidence = cls.Factory._meta.model
+        cls.evidence = cls.Factory()
         cls.evidence_dict = cls.evidence.__dict__
-        cls.evidence_queryset = cls.Evidence.objects.filter(finding=cls.evidence.finding)
+        cls.evidence_queryset = cls.querySet(cls.evidence)
+
+        cls.other_finding = ReportFindingLinkFactory()
+        cls.other_finding.report = cls.evidence.associated_report
+        cls.other_finding.save()
+
+        cls.other_finding_evidence = EvidenceOnFindingFactory()
+        cls.other_finding_evidence.friendly_name = "EvidenceOnFinding"
+        cls.other_finding_evidence.finding = cls.other_finding
+        cls.other_finding_evidence.save()
+
+        cls.other_report_finding = EvidenceOnReportFactory()
+        cls.other_report_finding.friendly_name = "EvidenceOnReport"
+        cls.other_report_finding.report = cls.evidence.associated_report
+        cls.other_report_finding.save()
 
     def setUp(self):
         pass
@@ -242,8 +340,6 @@ class EvidenceFormTests(TestCase):
         friendly_name=None,
         caption=None,
         description=None,
-        finding_id=None,
-        uploaded_by_id=None,
         evidence_queryset=None,
         modal=False,
         **kwargs,
@@ -256,8 +352,6 @@ class EvidenceFormTests(TestCase):
                 "friendly_name": friendly_name,
                 "caption": caption,
                 "description": description,
-                "finding": finding_id,
-                "uploaded_by": uploaded_by_id,
             },
             files={
                 "document": document,
@@ -285,8 +379,25 @@ class EvidenceFormTests(TestCase):
 
     def test_duplicate_friendly_name(self):
         new_evidence = self.evidence_dict.copy()
-        new_evidence["finding"] = self.evidence.finding
         new_evidence["friendly_name"] = self.evidence.friendly_name
+
+        form = self.form_data(**new_evidence)
+        errors = form["friendly_name"].errors.as_data()
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].code, "duplicate")
+
+    def test_duplicate_friendly_name_on_diff_finding(self):
+        new_evidence = self.evidence_dict.copy()
+        new_evidence["friendly_name"] = "EvidenceOnFinding"
+
+        form = self.form_data(**new_evidence)
+        errors = form["friendly_name"].errors.as_data()
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].code, "duplicate")
+
+    def test_duplicate_friendly_name_on_report(self):
+        new_evidence = self.evidence_dict.copy()
+        new_evidence["friendly_name"] = "EvidenceOnReport"
 
         form = self.form_data(**new_evidence)
         errors = form["friendly_name"].errors.as_data()
@@ -306,6 +417,26 @@ class EvidenceFormTests(TestCase):
 
         form = self.form_data(**evidence, evidence_queryset=None)
         self.assertTrue(form.is_valid())
+
+
+class EvidenceFormForFindingTests(BaseEvidenceFormTests, TestCase):
+    @classmethod
+    def factory(cls):
+        return EvidenceOnFindingFactory
+
+    @classmethod
+    def querySet(cls, evidence):
+        return evidence.finding.report.all_evidences()
+
+
+class EvidenceFormForReportTests(BaseEvidenceFormTests, TestCase):
+    @classmethod
+    def factory(cls):
+        return EvidenceOnReportFactory
+
+    @classmethod
+    def querySet(cls, evidence):
+        return evidence.report.all_evidences()
 
 
 class FindingNoteFormTests(TestCase):
@@ -391,6 +522,7 @@ class ReportTemplateFormTests(TestCase):
     def setUpTestData(cls):
         cls.template = ReportTemplateFactory()
         cls.template_dict = cls.template.__dict__
+        cls.user = UserFactory(password=PASSWORD)
 
     def setUp(self):
         pass
@@ -405,6 +537,8 @@ class ReportTemplateFormTests(TestCase):
         changelog=None,
         client_id=None,
         doc_type=None,
+        p_type=None,
+        user=None,
         **kwargs,
     ):
         return ReportTemplateForm(
@@ -416,7 +550,9 @@ class ReportTemplateFormTests(TestCase):
                 "changelog": changelog,
                 "client": client_id,
                 "doc_type": doc_type,
+                "p_type": p_type,
             },
+            user=user,
             files={
                 "document": document,
             },
@@ -425,14 +561,14 @@ class ReportTemplateFormTests(TestCase):
     def test_valid_data(self):
         template = self.template_dict.copy()
 
-        form = self.form_data(**template)
+        form = self.form_data(**template, user=self.user)
         self.assertTrue(form.is_valid())
 
     def test_blank_template(self):
         template = self.template_dict.copy()
         template["document"] = None
 
-        form = self.form_data(**template)
+        form = self.form_data(**template, user=self.user)
         errors = form["document"].errors.as_data()
         self.assertEqual(len(errors), 1)
         self.assertEqual(errors[0].code, "incomplete")
@@ -551,9 +687,24 @@ class SeverityFormTests(TestCase):
         errors = form["color"].errors.as_data()
         self.assertEqual(len(errors), 1)
         self.assertEqual(errors[0].code, "invalid")
+        self.assertEqual(
+            errors[0].message,
+            "Do not include the # symbol in the color field.",
+        )
 
         severity["color"] = "F4B08G"
         form = self.form_data(**severity)
         errors = form["color"].errors.as_data()
         self.assertEqual(len(errors), 1)
         self.assertEqual(errors[0].code, "invalid")
+        self.assertEqual(
+            errors[0].message,
+            "Please enter a valid hex color, three pairs of characters using A-F and 0-9 (e.g., 7A7A7A).",
+        )
+
+        severity["color"] = "FFFFF"
+        form = self.form_data(**severity)
+        errors = form["color"].errors.as_data()
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].code, "invalid")
+        self.assertEqual(errors[0].message, "Your hex color code should be six characters in length.")

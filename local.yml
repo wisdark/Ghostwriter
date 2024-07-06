@@ -1,8 +1,7 @@
-version: "3"
-
 volumes:
   local_postgres_data: {}
   local_postgres_data_backups: {}
+  local_data: {}
 
 services:
   django: &django
@@ -14,11 +13,13 @@ services:
       - postgres
     volumes:
       - .:/app
+      - local_data:/app/ghostwriter/media
     labels:
       name: ghostwriter_django
     environment:
       - USE_DOCKER=${USE_DOCKER}
       - IPYTHONDIR=${IPYTHONDIR}
+      - DJANGO_2FA_ALWAYS_REVEAL_BACKUP_TOKENS=${DJANGO_2FA_ALWAYS_REVEAL_BACKUP_TOKENS}
       - DJANGO_ACCOUNT_ALLOW_REGISTRATION=${DJANGO_ACCOUNT_ALLOW_REGISTRATION}
       - DJANGO_ACCOUNT_EMAIL_VERIFICATION=${DJANGO_ACCOUNT_EMAIL_VERIFICATION}
       - DJANGO_ADMIN_URL=${DJANGO_ADMIN_URL}
@@ -29,7 +30,11 @@ services:
       - DJANGO_QCLUSTER_NAME=${DJANGO_QCLUSTER_NAME}
       - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
       - DJANGO_SECURE_SSL_REDIRECT=${DJANGO_SECURE_SSL_REDIRECT}
+      - DJANGO_SESSION_COOKIE_AGE=${DJANGO_SESSION_COOKIE_AGE}
+      - DJANGO_SESSION_EXPIRE_AT_BROWSER_CLOSE=${DJANGO_SESSION_EXPIRE_AT_BROWSER_CLOSE}
+      - DJANGO_SESSION_SAVE_EVERY_REQUEST=${DJANGO_SESSION_SAVE_EVERY_REQUEST}
       - DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE}
+      - DJANGO_SOCIAL_ACCOUNT_ALLOW_REGISTRATION=${DJANGO_SOCIAL_ACCOUNT_ALLOW_REGISTRATION}
       - DJANGO_SUPERUSER_EMAIL=${DJANGO_SUPERUSER_EMAIL}
       - DJANGO_SUPERUSER_PASSWORD=${DJANGO_SUPERUSER_PASSWORD}
       - DJANGO_SUPERUSER_USERNAME=${DJANGO_SUPERUSER_USERNAME}
@@ -112,7 +117,7 @@ services:
     depends_on:
       - postgres
       - django
-    restart: always
+    restart: unless-stopped
     ports:
       - "${HASURA_GRAPHQL_SERVER_PORT}:8080"
       - "9691:9691"

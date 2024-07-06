@@ -5,8 +5,10 @@ import logging
 from datetime import datetime
 
 # Django Imports
+from django import forms
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.urls import reverse
 
 # 3rd Party Libraries
 from taggit.managers import TaggableManager
@@ -15,12 +17,16 @@ from taggit.managers import TaggableManager
 logger = logging.getLogger(__name__)
 
 
-class Oplog(models.Model):
-    """
-    Stores an individual operation log.
-    """
+class NoLengthLimitCharField(models.TextField):
+    def formfield(self, **kwargs):
+        kwargs["widget"] = forms.TextInput
+        return super().formfield(**kwargs)
 
-    name = models.CharField(max_length=255)
+
+class Oplog(models.Model):
+    """Stores an individual operation log."""
+
+    name = NoLengthLimitCharField()
     project = models.ForeignKey(
         "rolodex.Project",
         on_delete=models.CASCADE,
@@ -34,17 +40,27 @@ class Oplog(models.Model):
 
     class Meta:
         unique_together = ["name", "project"]
+        ordering = ["id", "project", "name"]
+        verbose_name = "Activity log"
+        verbose_name_plural = "Activity logs"
 
     def __str__(self):
         return f"{self.name} : {self.project}"
 
+    def get_absolute_url(self):
+        return reverse("oplog:oplog_entries", args=[str(self.id)])
 
-# Create your models here.
+
 class OplogEntry(models.Model):
-    """
-    Stores an individual log entry, related to :model:`oplog.Oplog`.
-    """
+    """Stores an individual log entry, related to :model:`oplog.Oplog`."""
 
+    entry_identifier = models.CharField(
+        "Identifier",
+        default="",
+        blank=True,
+        help_text="Integrations may use this to track log entries.",
+        max_length=65535,
+    )
     start_date = models.DateTimeField(
         "Start Date",
         null=True,
@@ -57,66 +73,63 @@ class OplogEntry(models.Model):
         blank=True,
         help_text="Provide the date and time the action concluded.",
     )
-    source_ip = models.CharField(
+    source_ip = NoLengthLimitCharField(
         "Source IP / Hostname",
         null=True,
         blank=True,
         help_text="Provide the source hostname / IP from which the command originated.",
-        max_length=255,
     )
-    dest_ip = models.CharField(
+    dest_ip = NoLengthLimitCharField(
         "Destination IP / Hostname",
         null=True,
         blank=True,
         help_text="Provide the destination hostname / ip on which the command was ran.",
-        max_length=255,
     )
-    tool = models.CharField(
+    tool = NoLengthLimitCharField(
         "Tool Name",
         null=True,
         blank=True,
         help_text="Name the tool you used to execute the action.",
-        max_length=255,
     )
-    user_context = models.CharField(
+    user_context = NoLengthLimitCharField(
         "User Context",
         null=True,
         blank=True,
-        help_text="The user context under which th command executed.",
-        max_length=255,
+        help_text="The user context under which the command executed.",
     )
     command = models.TextField(
         "Command",
-        null=True,
+        default="",
         blank=True,
         help_text="Provide the command you executed.",
     )
     description = models.TextField(
         "Description",
-        null=True,
+        default="",
         blank=True,
         help_text="A description of why you executed the command.",
     )
     output = models.TextField(
         "Output",
-        null=True,
+        default="",
         blank=True,
         help_text="The output of the executed command.",
     )
     comments = models.TextField(
         "Comments",
-        null=True,
+        default="",
         blank=True,
         help_text="Any additional comments or useful information.",
     )
-    operator_name = models.CharField(
+    operator_name = NoLengthLimitCharField(
         "Operator",
         null=True,
         blank=True,
         help_text="The operator that performed the action.",
-        max_length=255,
     )
     tags = TaggableManager(blank=True)
+    extra_fields = models.JSONField(default=dict)
+
     # Foreign Keys
     oplog_id = models.ForeignKey(
         "Oplog",
@@ -131,6 +144,14 @@ class OplogEntry(models.Model):
         # Stash the initial date values for future operations
         self.initial_start_date = self.start_date
         self.initial_end_date = self.end_date
+
+    class Meta:
+        ordering = ["-start_date", "-end_date", "oplog_id"]
+        verbose_name = "Activity log entry"
+        verbose_name_plural = "Activity log entries"
+        indexes = [
+            models.Index(fields=["oplog_id", "entry_identifier"]),
+        ]
 
     def clean(self, *args, **kwargs):
         if isinstance(self.start_date, str):

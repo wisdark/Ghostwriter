@@ -20,9 +20,7 @@ logger = logging.getLogger(__name__)
 
 @receiver(post_save, sender=User)
 def create_user_profile(sender, instance, created, **kwargs):
-    """
-    Create a new :model:`home.UserProfile` whenever a new :model:`users.User` is created.
-    """
+    """Create a new :model:`home.UserProfile` whenever a new :model:`users.User` is created."""
     if created:
         UserProfile.objects.create(user=instance)
 
@@ -44,15 +42,26 @@ def delete_old_avatar_on_update(sender, instance, **kwargs):
     """
     if hasattr(instance, "_current_avatar"):
         if instance._current_avatar:
-            if instance._current_avatar.path not in instance.avatar.path:
-                try:
-                    os.remove(instance._current_avatar.path)
-                    logger.info("Deleted old avatar image file %s", instance._current_avatar.path)
-                except Exception:  # pragma: no cover
-                    logger.exception(
-                        "Failed deleting old avatar image file: %s",
-                        instance._current_avatar.path,
-                    )
+            if instance.avatar:
+                if instance._current_avatar.path not in instance.avatar.path:
+                    try:
+                        os.remove(instance._current_avatar.path)
+                        logger.info("Deleted old avatar image file %s", instance._current_avatar.path)
+                    except Exception:  # pragma: no cover
+                        logger.exception(
+                            "Failed deleting old avatar image file: %s",
+                            instance._current_avatar.path,
+                        )
+            else:
+                if instance._current_avatar.path:
+                    try:
+                        os.remove(instance._current_avatar.path)
+                        logger.info("Deleted old avatar image file %s", instance._current_avatar.path)
+                    except Exception:  # pragma: no cover
+                        logger.exception(
+                            "Failed deleting old avatar image file: %s",
+                            instance._current_avatar.path,
+                        )
 
 
 @receiver(post_delete, sender=UserProfile)

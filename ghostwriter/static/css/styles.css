@@ -34,12 +34,19 @@ ol:not(.list-unstyled):not(.nav):not(.breadcrumb) {
 }
 
 pre {
+  font-family: 'Roboto Mono', Courier, monospace;
+  text-align: justify;
   font-size: var(--main-font-size);
   font-weight: 300;
-  line-height: 1.7em;
+  line-height: 1.5em;
   color: var(--main-txt-color);
-  margin-top: 20px;
-  margin-bottom: 20px;
+  margin: auto;
+  max-width: 70vw;
+  word-wrap: break-word;
+  overflow-x: auto;
+  border: 1pt solid var(--secondary-color);
+  white-space: pre-wrap;
+  padding: 5px;
 }
 
 code {
@@ -68,14 +75,17 @@ hr {
   margin-top: 10px;
 }
 
-.text-evidence {
-  margin-left: 15%;
-  text-align: left;
-  max-width: 70%;
-  word-wrap: break-word;
-  line-height: 20px;
-  font-family: 'Roboto Mono';
-  font-weight: 300;
+.img-evidence {
+  height: auto;
+  width: 60vw;
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.evidence-caption {
+  color: var(--secondary-color);
+  text-align: center;
 }
 
 .hidden-element:before {
@@ -87,6 +97,12 @@ hr {
 
 .description-block p {
   text-align: justify;
+  margin-bottom: 0;
+}
+
+.blurry {
+  color: transparent;
+  text-shadow: 0 0 8px #000;
 }
 
 /* ---------------------------------------------------
@@ -94,7 +110,9 @@ hr {
 ----------------------------------------------------- */
 
 .custom-file-label::after {
-  min-width:20%;
+  min-width: 20%;
+  content: 'Browse';
+  width: 10%;
 }
 
 .form-check-label {
@@ -172,6 +190,31 @@ hr {
   border-color: #aaa;
 }
 
+.tooltip-inner {
+  color: #fff;
+  background: var(--primary-color);
+}
+
+.bs-tooltip-auto[x-placement^=bottom] .arrow::before,
+.bs-tooltip-bottom .arrow::before {
+  border-bottom-color: var(--primary-color);
+}
+
+.bs-tooltip-auto[x-placement^=top] .arrow::before,
+.bs-tooltip-top .arrow::before {
+  border-top-color: var(--primary-color);
+}
+
+.bs-tooltip-auto[x-placement^=left] .arrow::before,
+.bs-tooltip-left .arrow::before {
+  border-left-color: var(--primary-color);
+}
+
+.bs-tooltip-auto[x-placement^=right] .arrow::before,
+.bs-tooltip-right .arrow::before {
+  border-right-color: var(--primary-color);
+}
+
 /* ---------------------------------------------------
     IMAGE STYLES
 ----------------------------------------------------- */
@@ -214,7 +257,6 @@ hr {
 
 .center {
   text-align: center;
-  display: block;
   margin-left: auto;
   margin-right: auto;
   width: 50%;
@@ -237,6 +279,10 @@ hr {
   padding: 0.5em;
   margin: 0.5em;
   font-size: var(--main-font-size);
+}
+
+.tox-toolbar__group:last-child {
+  margin-left: auto !important;
 }
 
 /* ---------------------------------------------------
@@ -424,8 +470,8 @@ h6 {
 }
 
 .invalid-feedback {
-    display: block;
-  }
+  display: block;
+}
 
 /* ---------------------------------------------------
     FILE UPLOAD STYLES
@@ -901,6 +947,19 @@ p.severity-box.info {
   margin-bottom: 0;
 }
 
+.error {
+  color: var(--burned-color);
+}
+
+.error-div {
+  border: 1px solid black;
+  width: 50%;
+  margin: 0 auto;
+  border-radius: 5px;
+  background-color: #f1f1f1;
+  padding: .5em;
+}
+
 /* ---------------------------------------------------
     GENERAL BUTTON STYLES
 ----------------------------------------------------- */
@@ -919,6 +978,10 @@ p.severity-box.info {
   -webkit-transition-duration: 0.4s;
   /* Safari */
   transition-duration: 0.4s;
+}
+
+.btn:focus {
+  box-shadow: 0 0 0 0.1rem var(--primary-color)
 }
 
 .button:hover {
@@ -969,6 +1032,11 @@ p.severity-box.info {
 .btn-primary {
   background-color: var(--button-primary-color);
   border-color: var(--button-primary-color);
+}
+
+.btn.btn-primary[disabled] {
+  background-color: var(--neutral-color);
+  border-color: var(--neutral-color);
 }
 
 .btn-outline-primary {
@@ -1181,10 +1249,6 @@ table.scroll {
   width: 100%;
 }
 
-table.scroll tbody {
-  display: block;
-}
-
 table.scroll thead,
 table.scroll tr {
   display: table;
@@ -1194,7 +1258,8 @@ table.scroll tr {
 }
 
 table.scroll tbody {
-  height: 80.5vh;
+  display: block;
+  max-height: 80.5vh;
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -1220,18 +1285,18 @@ table.table-oplog tbody tr:hover>td {
   transition: all .15s ease;
 }
 
-table.table-oplog tbody tr>td .btn i.fa-copy:hover {
+table.table-oplog tbody tr>td .btn:hover {
+  cursor: pointer;
+  /*transform: scale(1.5);*/
+  /*transition: all .15s ease;*/
   color: var(--primary-color);
 }
 
-table.table-oplog tbody tr>td .btn i.fa-trash:hover {
-  color: var(--blocked-color);
-}
-
-table.table-oplog tbody tr>td .btn:hover {
+table.table-oplog tbody tr>td .btn.danger:hover {
   cursor: pointer;
-  transform: scale(1.5);
-  transition: all .15s ease;
+  /*transform: scale(1.5);*/
+  /*transition: all .15s ease;*/
+  color: var(--blocked-color);
 }
 
 ::-webkit-scrollbar {
@@ -1263,8 +1328,31 @@ tr.hidden-row td>div {
     CALENDAR STYLES
 ----------------------------------------------------- */
 
+.popover-header {
+  font-weight: 600;
+}
+
 .fc .fc-toolbar.fc-header-toolbar {
   margin-bottom: 0 !important;
+}
+
+a.fc-event {
+  background: var(--secondary-color);
+}
+
+a.fc-event:active {}
+
+a.fc-event:hover,
+a.fc-event:active,
+a.fc-event:hover,
+a.fc-event:focus,
+a.fc-event:focus:after {
+  font-size: .85em;
+  background: var(--primary-color);
+}
+
+fc-hover {
+  background: var(--active-link-color);
 }
 
 .fc-scrollgrid>thead>tr>td,
@@ -1295,15 +1383,20 @@ tr.hidden-row td>div {
   content: '\f70c';
 }
 
+.calendar-report-icon .fc-event-title:before,
+.calendar-report-icon .fc-list-event-title:before {
+  font-family: 'Font Awesome 5 Free';
+  display: inline-block;
+  padding-right: 5px;
+  padding-left: 5px;
+  vertical-align: middle;
+  font-weight: 600;
+  content: '\f5ad';
+}
+
 .calendar-exec-complete .fc-event-title,
 .calendar-exec-complete .fc-list-event-title {
   text-decoration: line-through;
-}
-
-.calendar-exec-complete .fc-event-title:after,
-.calendar-exec-complete .fc-list-event-title:after {
-  content: '\00a0: COMPLETE';
-  display: inline-block;
 }
 
 .calendar-objective-icon .fc-event-title:before,
@@ -1683,6 +1776,34 @@ th.icon {
   padding: 0;
 }
 
+.custom-field-icon:before {
+  content: '\f0d0';
+}
+
+.clean-icon:before {
+  content: '\e06e';
+}
+
+.2fa-icon:before {
+  content: '\f577';
+}
+
+.tint-icon:before {
+  content: '\f043';
+}
+
+.border-icon:before {
+  content: '\f853';
+}
+
+.report-icon:before {
+  content: '\f570';
+}
+
+.tag-icon:before {
+  content: '\f02b';
+}
+
 .whitecard-icon:before {
   content: '\f15b';
 }
@@ -1917,6 +2038,10 @@ th.icon {
 }
 
 .edit-icon:before {
+  content: '\f044';
+}
+
+.edit-icon-right:after {
   content: '\f044';
 }
 
@@ -2354,10 +2479,6 @@ th.icon {
   display: block;
 }
 
-.finding-accordion .card-header {
-  cursor: pointer;
-}
-
 .finding-accordion {
   max-width: 100%;
   margin: 10px auto;
@@ -2431,6 +2552,7 @@ h5 a:after {
   color: #000;
   font-weight: 600;
   float: right;
+  margin-top: 4px;
 }
 
 h5 a[aria-expanded=true]:after {
@@ -2483,14 +2605,6 @@ h5 a[aria-expanded=true]:after {
 .finding-content ul,
 ol {
   text-align: left;
-}
-
-.finding-content pre {
-  text-align: justify;
-  font-family: 'Courier New', Courier, monospace;
-  padding-left: 10px;
-  white-space: pre-wrap;
-  border: 2px solid #dedede;
 }
 
 .finding-content code {
@@ -2552,6 +2666,11 @@ ol {
   margin-right: 0;
 }
 
+.note-container a {
+  color: var(--active-link-color);
+  text-decoration: underline;
+}
+
 .note-time {
   color: #aaa;
   font-size: .8em;
@@ -2592,6 +2711,16 @@ ol {
 .badge-pptx {
   color: #fff;
   background-color: var(--pptx-color);
+}
+
+.badge-healthy {
+  color: #fff;
+  background-color: var(--healthy-color);
+}
+
+.badge-unhealthy {
+  color: #fff;
+  background-color: var(--blocked-color);
 }
 
 /* ---------------------------------------------------
@@ -2685,11 +2814,6 @@ ol {
 .dashboard__item--col {
   flex-basis: calc(100% / var(--column-count));
   grid-column-end: span 1;
-}
-
-.custom-file-label::after {
-  content: 'Browse';
-  width: 10%;
 }
 
 .dragging {
@@ -3310,4 +3434,96 @@ input:checked+.slider:before {
   background-color: var(--healthy-color);
   border-radius: 50%;
   box-shadow: rgba(0, 0, 0, 0.2) 0 -1px 7px 1px, inset #304701 0 -1px 9px, var(--button-primary-color) 0 2px 12px;
+}
+
+/* ---------------------------------------------------
+    SOCIAL ACCOUNT BUTTONS
+----------------------------------------------------- */
+
+.socialaccount_providers {
+  padding: 0px;
+}
+
+/* ---------------------------------------------------
+    JQUERY AUTOCOMPLETE STYLES
+----------------------------------------------------- */
+
+.ui-menu {
+  list-style: none;
+}
+
+.ui-autocomplete {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 1000;
+  float: left;
+  display: none;
+  min-width: 160px;
+  padding: 4px 0;
+  margin: 0 0 10px 25px;
+  list-style: none;
+  background-color: #ffffff;
+  border-color: #ccc;
+  border-color: rgba(0, 0, 0, 0.2);
+  border-style: solid;
+  border-width: 1px;
+  -webkit-border-radius: 5px;
+  -moz-border-radius: 5px;
+  border-radius: 5px;
+  -webkit-box-shadow: 0 5px 10px rgba(0, 0, 0, 0.2);
+  -moz-box-shadow: 0 5px 10px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 5px 10px rgba(0, 0, 0, 0.2);
+  -webkit-background-clip: padding-box;
+  -moz-background-clip: padding;
+  background-clip: padding-box;
+  *border-right-width: 2px;
+  *border-bottom-width: 2px;
+}
+
+.ui-menu-item {
+  padding-left: .2em;
+  padding-right: .2em;
+}
+
+.ui-menu-item>a.ui-corner-all {
+  display: block;
+  padding: 3px 15px;
+  clear: both;
+  font-weight: normal;
+  line-height: 18px;
+  color: #555555;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.ui-state-hover,
+.ui-state-active {
+  color: #ffffff;
+  text-decoration: none;
+  background-color: var(--primary-color);
+  border-radius: .2em;
+  -webkit-border-radius: .2em;
+  -moz-border-radius: .2em;
+}
+
+textarea:focus,
+input[type="text"]:focus,
+input[type="password"]:focus,
+input[type="datetime"]:focus,
+input[type="datetime-local"]:focus,
+input[type="date"]:focus,
+input[type="month"]:focus,
+input[type="time"]:focus,
+input[type="week"]:focus,
+input[type="number"]:focus,
+input[type="email"]:focus,
+input[type="url"]:focus,
+input[type="search"]:focus,
+input[type="tel"]:focus,
+input[type="color"]:focus,
+.uneditable-input:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.075) inset, 0 0 8px rgba(126, 239, 104, 0.6);
+  outline: 0 none;
 }
