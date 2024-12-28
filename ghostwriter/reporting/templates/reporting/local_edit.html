@@ -184,6 +184,7 @@
 {% endblock %}
 
 {% block morescripts %}
+  {% include "snippets/cvss_scripts.html" %}
   <script>
     {% comment %} Connect to channel for finding-specific notifications {% endcomment %}
     const ws_finding = new WebSocket(
@@ -201,11 +202,6 @@
       console.error('Finding notification WebSocket closed unexpectedly');
     };
 
-    {%  comment %} Prepare CVSS calculator {% endcomment %}
-    $(document).ready(function () {
-      prepareCVSSCalc()
-    });
-
     {% comment %} Script for the WYSIWYG editor's AutoComplete {% endcomment %}
     let evidenceFiles = [
       {text: '\{\{.caption\}\}', value: '\{\{.caption\}\}'},
@@ -215,6 +211,10 @@
             text: '\{\{.{{ file.friendly_name|escapejs }}\}\}',
             value: '\{\{.{{ file.friendly_name|escapejs }}\}\}'
           },
+          {
+            text: '\{\{.ref {{ file.friendly_name|escapejs }}\}\}',
+            value: '\{\{.ref {{ file.friendly_name|escapejs }}\}\}'
+          },
         {% endfor %}
       {% endif %}
       {% if reportfindinglink.report.evidence_set.all  %}
@@ -222,6 +222,10 @@
           {
             text: '\{\{.{{ file.friendly_name|escapejs }}\}\}',
             value: '\{\{.{{ file.friendly_name|escapejs }}\}\}'
+          },
+          {
+            text: '\{\{.ref {{ file.friendly_name|escapejs }}\}\}',
+            value: '\{\{.ref {{ file.friendly_name|escapejs }}\}\}'
           },
         {% endfor %}
       {% endif %}

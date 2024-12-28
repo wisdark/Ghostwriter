@@ -9,7 +9,7 @@ from functools import reduce
 
 # Django Imports
 from django.db.models import TextField, Func, Subquery, OuterRef, Value, F
-from django.db.models.functions import Cast
+from django.db.models.functions import Cast, Left
 from django.db.models.expressions import CombinedExpression
 from django.utils.timezone import make_aware
 from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank, SearchVectorField
@@ -38,6 +38,7 @@ class TsVectorConcat(Func):
     Unlike Django's built in Concat function, this does not convert each argument to text first, so
     it can be used with tsvectors.
     """
+
     template = "(%(expressions)s)"
     arg_joiner = " || "
     output_field = SearchVectorField()
@@ -54,9 +55,7 @@ def create_oplog_entry(oplog_id, user):
 
     if verify_access(user, oplog.project):
         OplogEntry.objects.create(
-            oplog_id_id=oplog_id,
-            operator_name=user.username,
-            extra_fields=ExtraFieldSpec.initial_json(OplogEntry)
+            oplog_id_id=oplog_id, operator_name=user.username, extra_fields=ExtraFieldSpec.initial_json(OplogEntry)
         )
     else:
         logger.warning(
@@ -148,32 +147,37 @@ class OplogEntryConsumer(AsyncWebsocketConsumer):
             ]
 
             # Subquery to fetch tags
-            simple_vector_args.append(Subquery(
-                TaggedItem.objects.filter(
-                    content_type__app_label=OplogEntry._meta.app_label,
-                    content_type__model=OplogEntry._meta.model_name,
-                    object_id=OuterRef("pk"),
-                ).annotate(
-                    all_tags=Func(F("tag__name"), Value(" "), function="STRING_AGG")
-                ).values("all_tags")
-            ))
+            simple_vector_args.append(
+                Subquery(
+                    TaggedItem.objects.filter(
+                        content_type__app_label=OplogEntry._meta.app_label,
+                        content_type__model=OplogEntry._meta.model_name,
+                        object_id=OuterRef("pk"),
+                    )
+                    .annotate(all_tags=Func(F("tag__name"), Value(" "), function="STRING_AGG"))
+                    .values("all_tags")
+                )
+            )
 
             # JSON operations to fetch extra fields
             for spec in ExtraFieldSpec.objects.filter(target_model=OplogEntry._meta.label):
-                field = Cast(CombinedExpression(
+                if spec.type == "json":
+                    continue
+
+                field = CombinedExpression(
                     F("extra_fields"),
                     "->>",
                     Value(spec.internal_name),
-                ), TextField())
+                )
                 simple_vector_args.append(field)
                 if spec.type == "rich_text":
                     english_vector_args.append(field)
 
-            # Combine search vector
-            vector = TsVectorConcat(
-                SearchVector(*english_vector_args, config="english"),
-                SearchVector(*simple_vector_args, config="simple"),
-            )
+            # Create and combine search vectors.
+            # Limit inputs since PostgreSQL will abort the query if attempting to make a tsvector out of a huge string
+            vectors = [SearchVector(Left(Cast(va, TextField()), 100000), config="english") for va in english_vector_args] + \
+                [SearchVector(Left(Cast(va, TextField()), 100000), config="simple") for va in simple_vector_args]
+            vector = TsVectorConcat(*vectors)
 
             # Build filter.
             # Search using both english and simple configs, to help match both types of vectors. Also use prefix
@@ -181,15 +185,21 @@ class OplogEntryConsumer(AsyncWebsocketConsumer):
 
             def q_term(term):
                 term = "'" + term.replace("'", "''").replace("\\", "\\\\") + "':*"
-                return SearchQuery(term, config="english", search_type="raw") | SearchQuery(term, config="simple", search_type="raw")
+                return SearchQuery(term, config="english", search_type="raw") | SearchQuery(
+                    term, config="simple", search_type="raw"
+                )
 
             query = reduce(lambda a, b: a & b, (q_term(term) for term in filter.split()))
 
             # Run query
-            entries = entries.annotate(
-                search=vector,
-                rank=SearchRank(vector, query),
-            ).filter(search=query).order_by("-rank")
+            entries = (
+                entries.annotate(
+                    search=vector,
+                    rank=SearchRank(vector, query),
+                )
+                .filter(search=query)
+                .order_by("-start_date")
+            )
         else:
             entries = entries.order_by("-start_date")
         entries = entries[offset : offset + 100]
@@ -227,11 +237,13 @@ class OplogEntryConsumer(AsyncWebsocketConsumer):
             offset = json_data["offset"]
             filter = json_data.get("filter", "")
             entries = await self.get_log_entries(oplog_id, offset, user, filter)
-            message = json.dumps({
-                "action": "sync",
-                "filter": filter,
-                "offset": offset,
-                "data": entries,
-            })
+            message = json.dumps(
+                {
+                    "action": "sync",
+                    "filter": filter,
+                    "offset": offset,
+                    "data": entries,
+                }
+            )
 
             await self.send(text_data=message)

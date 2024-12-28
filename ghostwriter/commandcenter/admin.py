@@ -42,13 +42,21 @@ class ReportConfigurationAdmin(SingletonModelAdmin):
             },
         ),
         (
+            "Captions",
+            {
+                "fields": (
+                    "title_case_captions",
+                    "title_case_exceptions",
+                )
+            },
+        ),
+        (
             "Figures",
             {
                 "fields": (
                     "prefix_figure",
                     "label_figure",
-                    "title_case_captions",
-                    "title_case_exceptions",
+                    "figure_caption_location",
                 )
             },
         ),
@@ -58,6 +66,7 @@ class ReportConfigurationAdmin(SingletonModelAdmin):
                 "fields": (
                     "prefix_table",
                     "label_table",
+                    "table_caption_location",
                 )
             },
         ),
@@ -89,13 +98,11 @@ class ExtraFieldSpecForm(forms.ModelForm):
     user_default_value = forms.CharField(
         required=False,
         strip=True,
-        help_text="Value used in newly created objects. Changing this will not change existing objects, and newly created fields will be set to blank on existing objects."
+        help_text="Value used in newly created objects. Changing this will not change existing objects, and newly created fields will be set to blank on existing objects.",
     )
 
     description = forms.CharField(
-        required=False,
-        strip=True,
-        help_text="Help text shown under the extra field in forms"
+        required=False, strip=True, help_text="Help text shown under the extra field in forms"
     )
 
     def clean_user_default_value(self):

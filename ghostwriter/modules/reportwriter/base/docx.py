@@ -93,6 +93,12 @@ class ExportDocxBase(ExportBase):
         self.prefix_figure = f"{prefix_figure}"
         label_figure = global_report_config.label_figure
         self.label_figure = f"{label_figure}"
+        prefix_table = global_report_config.prefix_table
+        self.prefix_table = f"{prefix_table}"
+        self.figure_caption_location = global_report_config.figure_caption_location
+        label_table = global_report_config.label_table
+        self.label_table = f"{label_table}"
+        self.table_caption_location = global_report_config.table_caption_location
         self.title_case_captions = global_report_config.title_case_captions
         self.title_case_exceptions = global_report_config.title_case_exceptions.split(",")
 
@@ -231,6 +237,10 @@ class ExportDocxBase(ExportBase):
                 evidences=self.evidences_by_id,
                 figure_label=self.label_figure,
                 figure_prefix=self.prefix_figure,
+                figure_caption_location=self.figure_caption_location,
+                table_label=self.label_table,
+                table_prefix=self.prefix_table,
+                table_caption_location=self.table_caption_location,
                 title_case_captions=self.title_case_captions,
                 title_case_exceptions=self.title_case_exceptions,
                 border_color_width=(self.border_color, self.border_weight) if self.enable_borders else None,
@@ -278,12 +288,13 @@ class ExportDocxBase(ExportBase):
             for style in EXPECTED_STYLES:
                 if style not in document_styles:
                     warnings.append("Template is missing a recommended style (see documentation): " + style)
-                if style == "CodeInline":
-                    if document_styles[style].type != WD_STYLE_TYPE.CHARACTER:
-                        warnings.append("CodeInline style is not a character style (see documentation)")
-                if style == "CodeBlock":
-                    if document_styles[style].type != WD_STYLE_TYPE.PARAGRAPH:
-                        warnings.append("CodeBlock style is not a paragraph style (see documentation)")
+                else:
+                    if style == "CodeInline":
+                        if document_styles[style].type != WD_STYLE_TYPE.CHARACTER:
+                            warnings.append("CodeInline style is not a character style (see documentation)")
+                    if style == "CodeBlock":
+                        if document_styles[style].type != WD_STYLE_TYPE.PARAGRAPH:
+                            warnings.append("CodeBlock style is not a paragraph style (see documentation)")
             if "Table Grid" not in document_styles:
                 errors.append("Template is missing a required style (see documentation): Table Grid")
             if p_style and p_style not in document_styles:

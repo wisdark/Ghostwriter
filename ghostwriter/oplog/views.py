@@ -29,6 +29,7 @@ from ghostwriter.api.utils import (
 )
 from ghostwriter.commandcenter.models import ExtraFieldSpec
 from ghostwriter.modules.custom_serializers import ExtraFieldsSpecSerializer
+from ghostwriter.modules.shared import add_content_disposition_header
 from ghostwriter.oplog.admin import OplogEntryResource
 from ghostwriter.oplog.forms import OplogEntryForm, OplogForm
 from ghostwriter.oplog.models import Oplog, OplogEntry
@@ -219,7 +220,7 @@ class OplogSanitize(RoleBasedAccessControlMixin, SingleObjectMixin, View):
 
 def validate_headers(imported_data):
     """Validate the headers of the CSV file for an activity log import."""
-    headers = [
+    expected_header_count = collections.Counter([
         "entry_identifier",
         "start_date",
         "end_date",
@@ -233,9 +234,10 @@ def validate_headers(imported_data):
         "comments",
         "operator_name",
         "tags",
-        "extra_fields",
-    ]
-    return collections.Counter(imported_data.headers) == collections.Counter(headers)
+    ])
+    actual_header_count = collections.Counter(imported_data.headers)
+    num_extra_fields = actual_header_count.pop("extra_fields", 0)
+    return expected_header_count == actual_header_count and num_extra_fields in (0,1)
 
 
 def validate_log_selection(user, oplog_id):
@@ -258,9 +260,19 @@ def validate_log_selection(user, oplog_id):
 
 def import_data(request, oplog_id, new_entries, dry_run=False):
     """Import the data into a dataset for validation and import."""
+    logger.info("Importing log data for log ID %s", oplog_id)
     dataset = Dataset()
     oplog_entry_resource = OplogEntryResource()
-    imported_data = dataset.load(new_entries, format="csv")
+    try:
+        imported_data = dataset.load(new_entries, format="csv")
+    except csv.Error as exception:  # pragma: no cover
+        logger.error("An error occurred while loading the CSV file for log import: %s", exception)
+        messages.error(
+            request,
+            "Your log file could not be loaded. There may be cells that exceed the 128KB text size limit for CSVs.",
+            extra_tags="alert-error",
+        )
+        return None
 
     if "oplog_id" in imported_data.headers:
         del imported_data["oplog_id"]
@@ -618,10 +630,8 @@ class OplogExport(RoleBasedAccessControlMixin, SingleObjectMixin, View):
         queryset = obj.entries.all()
         opts = queryset.model._meta
 
-        response = HttpResponse(
-            content_type="text/csv",
-            headers={"Content-Disposition": 'attachment; filename="export.csv"'},
-        )
+        response = HttpResponse(content_type="text/csv")
+        add_content_disposition_header(response, f"{obj.name}.csv")
 
         writer = csv.writer(response)
         field_names = [field.name for field in opts.fields]
